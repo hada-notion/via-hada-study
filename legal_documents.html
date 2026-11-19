@@ -227,7 +227,7 @@
 <div id="column-menu" class="column-menu" role="dialog" aria-label="열 정렬 및 필터" hidden></div>
 <script src="hada_config.js"></script>
 <script src="admin_auth.js?v=4ffde89c"></script>
-<script src="assets/hada-shortcuts.js?v=e1c30e10"></script>
+<script src="assets/hada-shortcuts.js?v=cebdafc2"></script>
 <script>
   // 학원 연결 설정은 hada_config.js에서 읽는다(HadaAdminAuth.config). 없거나 잘못되면 로그인 화면에 알린다.
   let SUPABASE_URL = "", SUPABASE_ANON_KEY = "", CONFIG_ERROR = "";
@@ -512,7 +512,7 @@
       html+=`<section class="class-receipt-list"><h2>${esc(documentTitle(snapshot))}</h2><div class="doc-sub">별지 제24호서식 항목 기반 초안 · 원부 5년 보관</div><h3>반명: ${field(g.className)} &nbsp; 교습과목: ${field(g.subject)}</h3>`;
     html+=`<table class="doc-table"><thead><tr><th>일련번호</th><th>납부일자</th><th>납부자(성명)</th><th>등록번호</th><th>생년월일</th><th>교습과목</th><th>신고 교습과정</th><th>교습기간</th><th>교습비</th><th>기타경비</th><th>결제금액</th><th>비고</th></tr></thead><tbody>`;
     g.rows.forEach(r=>html+=`<tr><td>${field(r.serialNo)}</td><td>${esc(r.paymentDate)}</td><td class="name-cell">${field(r.payerName)}</td><td>${field(r.registrationNo)}</td><td>${esc(r.birthDate)}</td><td>${field(r.subject)}</td><td>${field(r.className)}</td><td>${esc(billingText(r))}</td><td>${money(r.amount)}</td><td>${money(r.etcExpense)}</td><td>${money(r.paidAmount)}</td><td class="note-cell">${esc(r.note)}</td></tr>`);
-      html+=`</tbody></table><div class="legend">반별 결제금액 합계: ${won(g.rows.reduce((sum,r)=>sum+(r.paidAmount ?? 0),0))}<span class="screen-only">교습비는 청구금액, 기타경비는 출력용 기본값 0원입니다. 필요 시 엑셀에서 직접 수정하고 실제 수납액과 대조하세요.</span></div></section>`;
+      html+=`</tbody></table><div class="legend">반별 결제금액 합계: ${won(g.rows.reduce((sum,r)=>sum+(r.paidAmount ?? 0),0))}<span class="screen-only">교습비는 청구금액, 기타경비는 수강료의 기타경비 금액(클래스에 붙인 매달 기타경비, 없으면 0원)입니다. 필요 시 엑셀에서 직접 수정하고 실제 수납액과 대조하세요.</span></div></section>`;
     });
     return html+`<div class="legend">조회 전체 결제금액 합계: ${won(data.rows.reduce((sum,r)=>sum+(r.paidAmount ?? 0),0))}</div>`;
   }
@@ -779,7 +779,7 @@
       const groups=registerGroups(data);
       (groups.length?groups:[{className:"조회 결과 없음",subject:"",rows:[]}]).forEach(g=>tableSheet(g.className || "신고명 미입력",title,["등록번호","성명","주소","전화번호","입원 연월일","퇴원 연월일"],REGISTER_COLUMN_RATIOS.map(width=>Number((width*1.2).toFixed(1))),g.rows.map(r=>[optionalNumber(r.registrationNo),excelText(r.studentName),excelText(r.address),excelText(r.phone),excelDate(r.enrollDate),excelDate(r.endDate)]),{dates:[5,6],alignments:["center","center","left","center","center","center"],autoHeight:true,subtitle:`반명: ${g.className || "미입력"} · 교습과목: ${g.subject || "미입력"}`,note:"별지 제25호서식 항목 기준 · 3년 보관. 전화번호: 학생 → 지정 우선 연락처 → 다른 등록 연락처(어머니·아버지·기타 보호자 순) → 누락 안내."}));
     }else if(query.docType==="receipt-ledger"){
-      const ws=tableSheet("관리용 목록",title,["일련번호","납부일자","납부자(성명)","등록번호","생년월일","교습과목","신고 교습과정","교습기간","교습비","기타경비","결제금액","비고"],[12,14,16,12,14,14,24,30,16,16,16,26],data.rows.map(r=>[optionalNumber(r.serialNo),excelDate(r.paymentDate),excelText(r.payerName),optionalNumber(r.registrationNo),excelDate(r.birthDate),excelText(r.subject),excelText(r.className),excelText(billingText(r)),optionalNumber(r.amount),optionalNumber(r.etcExpense),optionalNumber(r.paidAmount),excelText(r.note)]),{dates:[2,5],money:[9,10,11],alignments:["center","center","center","center","center","center","center","center","center","center","center","left"],note:"목록은 관리용. 원부·영수증 시트는 별지 제24호서식 항목 기반 초안. 교습비는 청구금액, 기타경비는 출력용 기본값 0원. 엑셀에서 필요한 금액을 수정하고 실제 수납액·환불·취소·발행자 서명을 확인하세요."});
+      const ws=tableSheet("관리용 목록",title,["일련번호","납부일자","납부자(성명)","등록번호","생년월일","교습과목","신고 교습과정","교습기간","교습비","기타경비","결제금액","비고"],[12,14,16,12,14,14,24,30,16,16,16,26],data.rows.map(r=>[optionalNumber(r.serialNo),excelDate(r.paymentDate),excelText(r.payerName),optionalNumber(r.registrationNo),excelDate(r.birthDate),excelText(r.subject),excelText(r.className),excelText(billingText(r)),optionalNumber(r.amount),optionalNumber(r.etcExpense),optionalNumber(r.paidAmount),excelText(r.note)]),{dates:[2,5],money:[9,10,11],alignments:["center","center","center","center","center","center","center","center","center","center","center","left"],note:"목록은 관리용. 원부·영수증 시트는 별지 제24호서식 항목 기반 초안. 교습비는 청구금액, 기타경비는 수강료의 기타경비 금액(클래스에 붙인 매달 기타경비, 없으면 0원). 엑셀에서 필요한 금액을 수정하고 실제 수납액·환불·취소·발행자 서명을 확인하세요."});
       const sumRow=data.rows.length+6;
       ws.getCell(sumRow,10).value="결제 합계";ws.getCell(sumRow,11).value=data.rows.length?{formula:`SUM(K6:K${data.rows.length+5})`,result:data.rows.reduce((sum,r)=>sum+(r.paidAmount ?? 0),0)}:0;ws.getCell(sumRow,11).numFmt='#,##0"원"';ws.getCell(sumRow,10).alignment={horizontal:"center"};ws.getCell(sumRow,11).alignment={horizontal:"center"};
       const forms=wb.addWorksheet(uniqueName("원부·영수증"),{views:[{showGridLines:false}],pageSetup:{paperSize:9,orientation:"portrait",fitToPage:true,fitToWidth:1,fitToHeight:0,horizontalCentered:true,margins:{left:0.3,right:0.3,top:0.4,bottom:0.4,header:0.2,footer:0.2}}});

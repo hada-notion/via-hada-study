@@ -26,6 +26,7 @@ import {
 	fetchWithRetry,
 	notionHeaders,
 	queryDataSource,
+	fullRelationIds,
 } from "./notionClient.ts"
 import {
 	DS_CLASS_SESSION,
@@ -40,16 +41,23 @@ import {
 	setAssignmentGenDone,
 	setAssignmentGenError,
 } from "./createAssignmentTarget.ts"
-import { isRunning } from "./statusTracking.ts"
+import { isRunning, markQueued } from "./statusTracking.ts"
+import { ROUTINE_STATUS_SPEC, TARGET_ROUTINE_CHECKS } from "./routineCheck.ts"
+import { enqueueSync, wakeSyncQueueWorker } from "./syncQueue.ts"
 import { text as propText, numberOf as propNumber, fileUrlOf, dateStartOf } from "./reportCacheShared.ts"
 import { readPageBodyBlocks } from "./feedBody.ts"
 import { libraryCopyReady, readBooks, readUnits, sortUnits } from "./libraryCopy.ts"
 import { textbookSources } from "./textbookSearch.ts"
 import { cleanUnitIds, selectedUnitsProp, unitNamesOf, unitTextOf, unitIdsOf } from "./selectedUnits.ts"
 import { runInBackground } from "./backgroundTask.ts"
+import { seoulLabel } from "./seoulLabel.ts"
+import { assignMakeup, checkAbsence, MakeupError, waitingFilter, MAKEUP_DECISION, MAKEUP_DECISIONS, MAKEUP_SESSION, ORIGINAL_ABSENCE } from "./makeupAssign.ts"
+import { isDeletingFlagSet, queueCascadeDelete } from "./cascadeDeleteTarget.ts"
 import { mirrorJobs, mirrorPageIds, mirrorSaved, removePages } from "./classRoomCopy.ts"
 import { libraryIds } from "./libraryProp.ts"
 import { isMakeupSession, SESSION_KIND_MAKEUP, SESSION_KIND_PROP } from "./sessionKind.ts"
+import { attMemoKey, withAttMemoName } from "./attendanceMemo.ts"
+import { ACTIVITY_MEMO, nameLearner, propKey } from "./propAlias.ts"
 
 type Page = Record<string, any>
 
@@ -76,7 +84,6 @@ export function homeworkState(name: string | null | undefined): string {
 	return ""
 }
 const GROUP_PROGRESS = "그룹 진도"
-const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"]
 const MAX_ITEMS = 60
 
 // ---------- 작은 도우미 ----------
@@ -111,13 +118,7 @@ export function seoulDayRange(date: string): { start: string; end: string } {
 	const end = new Date(start.getTime() + 86_400_000)
 	return { start: start.toISOString(), end: end.toISOString() }
 }
-export function seoulLabel(iso: string | null): string {
-	if (!iso) return ""
-	const d = new Date(new Date(iso).getTime() + 9 * 3_600_000)
-	const mm = String(d.getUTCMonth() + 1).padStart(2, "0")
-	const dd = String(d.getUTCDate()).padStart(2, "0")
-	return `${mm}.${dd}(${WEEKDAYS[d.getUTCDay()]})`
-}
+export { seoulLabel } // 한 곳: _shared/seoulLabel.ts(학습기록·과제 제목과 같은 함수)
 export function seoulTime(iso: string | null): string {
 	if (!iso || !iso.includes("T")) return ""
 	const d = new Date(new Date(iso).getTime() + 9 * 3_600_000)
@@ -172,6 +173,12 @@ function sessionSummary(p: Page) {
 		students: rel(p, "출석").length,
 		records: rel(p, "학습기록").length,
 		attendanceSummary: formulaString(p, "출석현황") ?? "",
+		// (2.8 하루 수업 페이지, 앱서버 261118) 수업 구분(정규·보강·휴강 이름 그대로)·학습 내용 한 줄·처리 상태·오류·시간표.
+		kind: selectName(p, SESSION_KIND_PROP) ?? "",
+		summary: propText(p.properties?.["학습 내용"]).trim(),
+		busy: propText(p.properties?.["실시간 처리 상태"]).trim(),
+		error: propText(p.properties?.["마지막 오류"]).trim(),
+		blockId: rel(p, "시간표")[0] ?? null,
 	}
 }
 
@@ -506,8 +513,10 @@ export async function loadSession(sessionId: string) {
 			status: selectName(a, "출석 상태") ?? "",
 			arrivedAt: dateStart(a, "등원스템프"),
 			leftAt: dateStart(a, "하원스템프"),
-			memo: plain(a, "메모"),
+			memo: plain(a, attMemoKey(a)), // 출석 메모: `메모(내부용)`, 아직 안 바꾼 학원은 `메모`(v2.8.0 항목 62)
 			comment: plain(a, "선생님 한마디"),
+			reportStatus: propText(a.properties?.["보고서 전송 상태"]).trim(), // (2.8) 일일 보고서 전송 상태
+
 			dueActivityIds: rel(a, "과제"),
 		}))
 		.sort((x, y) => x.name.localeCompare(y.name, "ko"))
@@ -533,7 +542,16 @@ export async function loadSession(sessionId: string) {
 	const extra = await cardExtras(recordPages, []) // (v2.5.111 속도) 본문은 펼칠 때 record-body로
 	const records = (await withSubjects(recordPages)).map((r, i) => ({ ...r, ...extra(recordPages[i]) }))
 	return {
-		session: await (async () => { const c = (await classInfo(rel(session, "클래스").slice(0, 1))).get(rel(session, "클래스")[0]); return { ...sessionSummary(session), className: c?.name ?? "", classEmoji: c?.emoji ?? "" } })(),
+		session: await (async () => {
+			const c = (await classInfo(rel(session, "클래스").slice(0, 1))).get(rel(session, "클래스")[0])
+			return {
+				...sessionSummary(session), className: c?.name ?? "", classEmoji: c?.emoji ?? "",
+				// (2.8) 수업 안내: 메모(쓸 수 있음)·보낸 현황·미리보기(수식)
+				notice: propText(session.properties?.[SESSION_NOTICE_MEMO]).trim(),
+				noticeStatus: propText(session.properties?.["수업 안내 현황"]).trim(),
+				noticePreview: propText(session.properties?.["수업 안내 미리보기"]).trim(),
+			}
+		})(),
 		students: students.map(({ dueActivityIds: _drop, ...s }) => s),
 		homeworkDue,
 		records,
@@ -673,7 +691,7 @@ export async function loadActivities(recordId: string) {
 					status: homeworkState(selectName(a, "과제상태")),
 					correct: numberOf(a, "정답 문항"),
 					total: numberOf(a, "전체 문항"),
-					memo: plain(a, "메모"),
+					memo: plain(a, propKey(a, ACTIVITY_MEMO)), // 학습활동 메모: `메모(내부용)`, 아직 안 바꾼 학원은 `메모`(v2.8.0 항목 64)
 				}
 			})
 			.sort((x, y) => x.name.localeCompare(y.name, "ko")),
@@ -687,17 +705,18 @@ function rollupSelect(page: Page, prop: string): string {
 }
 function formulaDate(page: Page, prop: string): string | null {
 	const f = page?.properties?.[prop]?.formula
-	return f?.date?.start ?? (typeof f?.string === "string" && /^d{4}-d{2}-d{2}/.test(f.string) ? f.string : null)
+	// (v2.8.0 항목 81) 역슬래시가 빠져 글자로 온 날짜를 늘 버리던 정규식을 고침
+	return f?.date?.start ?? (typeof f?.string === "string" && /^\d{4}-\d{2}-\d{2}/.test(f.string) ? f.string : null)
 }
 export async function loadStudent(registrationId: string) {
 	if (!isId(registrationId)) throw new ClassRoomError(400, "학생 형식이 올바르지 않습니다.")
 	const [acts, memos] = await Promise.all([
 		queryDataSource(DS_STUDY_ACTIVITY, { filter: { property: "등록", relation: { contains: registrationId } }, sorts: [{ timestamp: "created_time", direction: "descending" }], page_size: 40 }),
-		queryDataSource(DS_ATTENDANCE, {
-			filter: { and: [{ property: "등록", relation: { contains: registrationId } }, { property: "메모", rich_text: { is_not_empty: true } }] },
+		withAttMemoName((memoProp) => queryDataSource(DS_ATTENDANCE, {
+			filter: { and: [{ property: "등록", relation: { contains: registrationId } }, { property: memoProp, rich_text: { is_not_empty: true } }] },
 			sorts: [{ property: "수업일시", direction: "descending" }],
 			page_size: 10,
-		}),
+		})),
 	])
 	const activities = ((acts as any).results ?? []) as Page[]
 	const recordIds = dedupe(activities.flatMap((a) => rel(a, "학습기록")))
@@ -707,7 +726,7 @@ export async function loadStudent(registrationId: string) {
 	return {
 		homework: activities.filter((a) => kindOf(a) === "과제").slice(0, 8).map((a) => ({ id: a.id as string, ...named(a), due: formulaDate(a, "과제 마감일"), submitted: selectName(a, "과제상태") === HOMEWORK_SUBMITTED })),
 		tests: activities.filter((a) => kindOf(a) === "평가" && numberOf(a, "전체 문항")).slice(0, 5).map((a) => ({ id: a.id as string, ...named(a), correct: numberOf(a, "정답 문항"), total: numberOf(a, "전체 문항") })),
-		memos: (((memos as any).results ?? []) as Page[]).map((m) => ({ attendanceId: m.id as string, date: dateStart(m, "수업일시"), memo: plain(m, "메모") })),
+		memos: (((memos as any).results ?? []) as Page[]).map((m) => ({ attendanceId: m.id as string, date: dateStart(m, "수업일시"), memo: plain(m, attMemoKey(m)) })),
 	}
 }
 
@@ -721,14 +740,31 @@ export async function saveAttendance(items: unknown) {
 			if (it.status !== "" && !(ATTENDANCE_STATUSES as readonly string[]).includes(it.status)) throw new ClassRoomError(400, "출석 상태가 올바르지 않습니다.")
 			props["출석 상태"] = { select: it.status ? { name: it.status } : null }
 		}
-		if (it.memo !== undefined) props["메모"] = richText(String(it.memo))
 		if (it.comment !== undefined) props["선생님 한마디"] = richText(String(it.comment))
-		return { id: it.attendanceId as string, props }
+		// (v2.8.0 항목 94) 결석의 `보강 여부`(보강 필요 / 보강 없음, ""는 비우기 = 판단 전) — 노션에서 고르는 것과 같다.
+		if (it.makeupDecision !== undefined) {
+			if (it.makeupDecision !== "" && !(MAKEUP_DECISIONS as readonly string[]).includes(it.makeupDecision)) throw new ClassRoomError(400, "보강 여부가 올바르지 않습니다(보강 필요·보강 없음).")
+			props[MAKEUP_DECISION] = { select: it.makeupDecision ? { name: it.makeupDecision } : null }
+		}
+		// (2.8 하루 수업 페이지) 등·하원 시각 고치기: ISO 시각, ""는 비우기.
+		for (const [key, prop] of [["arrivedAt", "등원스템프"], ["leftAt", "하원스템프"]] as const) {
+			if (it[key] === undefined) continue
+			const v = String(it[key] ?? "")
+			if (v && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v) || Number.isNaN(Date.parse(v)))) throw new ClassRoomError(400, "등·하원 시각 형식이 올바르지 않습니다(ISO 시각).")
+			props[prop] = { date: v ? { start: v } : null }
+		}
+		return { id: it.attendanceId as string, props, memo: it.memo === undefined ? undefined : richText(String(it.memo)) }
 	})
-	const saved = await mapWithConcurrency(updates, 3, (u) => updatePageProperties(u.id, u.props)) as Page[]
+	// 출석 메모는 `메모(내부용)`으로 쓰고, 아직 안 바꾼 학원이면 `메모`로 다시 쓴다(v2.8.0 항목 62).
+	const saved = await mapWithConcurrency(updates, 3, (u) => u.memo === undefined
+		? updatePageProperties(u.id, u.props)
+		: withAttMemoName((memoProp) => updatePageProperties(u.id, { ...u.props, [memoProp]: u.memo }))) as Page[]
 	await mirrorSaved("cr_attendance", saved) // 복사본 함께 쓰기(v2.5.115, v2.5.116부터 Notion 수정 응답을 그대로)
 	return { saved: updates.length }
 }
+
+const activityMemoName = nameLearner(ACTIVITY_MEMO)
+export function resetActivityMemoName() { activityMemoName.reset() }
 
 export async function saveActivities(items: unknown) {
 	if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS) throw new ClassRoomError(400, "저장할 내용이 없습니다.")
@@ -740,9 +776,10 @@ export async function saveActivities(items: unknown) {
 			props["과제상태"] = { select: it.status ? { name: HOMEWORK_OPTION[it.status] } : null }
 		} else if (it.submitted !== undefined) props["과제상태"] = { select: { name: it.submitted ? HOMEWORK_SUBMITTED : HOMEWORK_MISSING } }
 		// 학습활동 메모(v2.6.9, 내부용 — 학부모 리포트에 보이지 않음)
+		let memo: unknown = undefined
 		if (it.memo !== undefined) {
 			if (typeof it.memo !== "string") throw new ClassRoomError(400, "메모 형식이 올바르지 않습니다.")
-			props["메모"] = richText(it.memo.trim().slice(0, 2000))
+			memo = richText(it.memo.trim().slice(0, 2000))
 		}
 		for (const [key, prop] of [["correct", "정답 문항"], ["total", "전체 문항"]] as const) {
 			if (it[key] === undefined) continue
@@ -751,9 +788,12 @@ export async function saveActivities(items: unknown) {
 			props[prop] = { number: v }
 		}
 		if (typeof it.correct === "number" && typeof it.total === "number" && it.correct > it.total) throw new ClassRoomError(400, "맞힌 문항이 전체 문항보다 많습니다.")
-		return { id: it.activityId as string, props }
+		return { id: it.activityId as string, props, memo }
 	})
-	const saved = await mapWithConcurrency(updates, 3, (u) => updatePageProperties(u.id, u.props)) as Page[]
+	// 학습활동 메모는 `메모(내부용)`으로 쓰고, 아직 안 바꾼 학원이면 `메모`로 다시 쓴다(v2.8.0 항목 64).
+	const saved = await mapWithConcurrency(updates, 3, (u) => u.memo === undefined
+		? updatePageProperties(u.id, u.props)
+		: activityMemoName.run((memoProp) => updatePageProperties(u.id, { ...u.props, [memoProp]: u.memo }))) as Page[]
 	await mirrorSaved("cr_activities", saved) // 복사본 함께 쓰기(v2.5.115, v2.5.116부터 Notion 수정 응답을 그대로)
 	return { saved: updates.length }
 }
@@ -825,6 +865,9 @@ export async function createRecords(body: any) {
 			"수업": relation([ctx.session.id]),
 			...touched(),
 		}
+		// (v2.8.0 항목 81) [학습기록 생성]처럼 수업의 클래스를 채운다 — 클래스 "평가" 탭이 이 칸으로 거른다
+		const classId = rel(ctx.session, "클래스")[0]
+		if (classId) props["클래스"] = relation([classId])
 		if (book) props["진도교재"] = relation([book.id])
 		if (regularBookId) props["교재"] = relation([regularBookId])
 		if (subjectIds.length) props["과목"] = relation(subjectIds)
@@ -915,67 +958,93 @@ export async function createActivities(recordId: string) {
 	return { status: "started", students: registrationIds.length }
 }
 
-// ---------- 보강 대기실 ----------
-// 고른 보강 출석들로 보강 수업을 만든다(1명=1:1, 여러 명=그룹). 시간표·클래스는 비워 두고 `수업 구분`을 보강으로 둔다.
+// ---------- 보강 (v2.8.0 항목 92, C1 — v2.8 노션 보강 모델 하나로) ----------
+// 노션과 같은 흐름: 결석 `보강 여부` → `보강 수업` → [보강 배정] → 🔵 보강 출석(`기존 결석` = 원래 결석).
+// [보강 배정]은 _shared/makeupAssign.ts 한 곳, 지우기는 노션 [삭제]와 같은 큐(cascade-delete)라 결석이 보강 대기로 돌아오는 정리도 같다.
+// (옛 방식 — 수업 없는 🔵 보강 출석을 대기실로 보고 그 출석을 보강 수업에 붙이기 — 은 v2.8에서 쓰지 않는다.)
+const makeupError = (err: unknown): never => {
+	if (err instanceof MakeupError) throw new ClassRoomError(err.status, err.message)
+	throw err
+}
+async function mirrorMakeup(sessionId: string, attendanceIds: string[]) {
+	await mirrorJobs([["cr_sessions", [sessionId]], ["cr_attendance", attendanceIds]]) // 복사본 함께 쓰기(v2.5.115)
+}
+
+// 노션 "보강 대기" 보기와 같은 목록(판단 안 한 결석 + 보강 필요인데 배정 안 된 결석).
+export async function loadMakeupWaiting() {
+	const rows = await queryAllPages(DS_ATTENDANCE, waitingFilter())
+	return {
+		waiting: rows.map((a: Page) => ({
+			attendanceId: a.id as string,
+			registrationId: rel(a, "등록")[0] ?? null,
+			name: studentName(a),
+			className: formulaString(a, "클래스(알림톡)") ?? "",
+			start: a.properties?.["수업일시"]?.date?.start ?? null,
+			decision: selectName(a, MAKEUP_DECISION) ?? "",
+			sessionId: rel(a, MAKEUP_SESSION)[0] ?? null,
+		})).sort((x, y) => String(x.start ?? "").localeCompare(String(y.start ?? ""))),
+	}
+}
+
+// 결석 하나를 보강 수업에 배정 = 노션 출석 [보강 배정].
+export async function assignMakeupAction(body: any) {
+	if (!isId(body?.absenceId) || !isId(body?.sessionId)) throw new ClassRoomError(400, "결석과 보강 수업을 골라 주세요.")
+	const r = await assignMakeup(body.absenceId, body.sessionId).catch(makeupError)
+	await mirrorMakeup(r.sessionId, [r.attendanceId, r.absenceId])
+	return r
+}
+
+// 보강 수업을 만들고(1명 = 1:1, 여러 명 = 그룹) 고른 결석을 차례로 배정한다. 시간표·클래스는 비워 두고 `수업 구분`을 보강으로 둔다.
+// 결석은 수업을 만들기 전에 모두 확인한다(하나라도 안 되면 아무것도 만들지 않음).
 export async function createMakeupSession(body: any) {
-	const attendanceIds = ids(body?.attendanceIds, 30)
-	if (!attendanceIds.length) throw new ClassRoomError(400, "보강 학생을 골라 주세요.")
+	if (body?.attendanceIds !== undefined) throw new ClassRoomError(400, "보강은 결석에서 배정합니다(v2.8) — absenceIds에 결석을 보내 주세요.")
+	const absenceIds = body?.absenceIds === undefined ? [] : ids(body.absenceIds, 30)
 	if (!isId(body?.teacherId)) throw new ClassRoomError(400, "담당강사를 골라 주세요.")
 	const start = typeof body?.start === "string" && !Number.isNaN(Date.parse(body.start)) ? body.start : null
 	const end = typeof body?.end === "string" && !Number.isNaN(Date.parse(body.end)) ? body.end : null
 	if (!start) throw new ClassRoomError(400, "보강 시각을 정해 주세요.")
-	const attendances = await getPages(attendanceIds)
-	for (const a of attendances) {
-		if (rel(a, "수업").length) throw new ClassRoomError(409, `${studentName(a)} 학생은 이미 수업에 연결돼 있습니다.`)
-		if (selectName(a, "출석 상태") !== "🔵 보강") throw new ClassRoomError(409, `${studentName(a)} 학생은 보강 출석이 아닙니다.`)
-	}
-	const regs = dedupe(attendances.flatMap((a) => rel(a, "등록")))
+	const absences = await getPages(absenceIds)
+	for (const a of absences) await checkAbsence(a).catch(makeupError)
+	if (new Set(absences.map((a) => rel(a, "등록")[0])).size !== absences.length) throw new ClassRoomError(409, "같은 학생의 결석을 한 보강 수업에 두 번 배정할 수 없습니다.")
 	const label = `${seoulLabel(start)} ${seoulTime(start)}`.trim()
 	const session = await createPage(DS_CLASS_SESSION, {
 		"이름": { title: [{ text: { content: `보강 ${label}` } }] },
 		"수업일시": { date: { start, ...(end ? { end } : {}) } },
 		"담당강사": relation([body.teacherId]),
 		[SESSION_KIND_PROP]: { select: { name: SESSION_KIND_MAKEUP } },
-		"등록": relation(regs),
-		"출석": relation(attendanceIds),
 	}) as Page
-	await mapWithConcurrency(attendanceIds, 3, (id) =>
-		updatePageProperties(id, { "수업": relation([session.id]), "담당강사": relation([body.teacherId]), ...touched() }))
-	await mirrorJobs([["cr_sessions", [session.id as string]], ["cr_attendance", attendanceIds]]) // 복사본 함께 쓰기(v2.5.115)
-	return { sessionId: session.id as string }
+	const sessionId = session.id as string
+	const made: string[] = []
+	let current = session
+	for (const a of absences) {
+		const r = await assignMakeup(a.id as string, sessionId, { absence: a, session: current }).catch(makeupError)
+		made.push(r.attendanceId)
+		current = await getPage(sessionId) as Page // 명단(등록)이 늘었으니 다시 읽고 다음 배정
+	}
+	await mirrorMakeup(sessionId, [...made, ...absences.map((a) => a.id as string)])
+	return { sessionId, assigned: made }
 }
 
-// 보강 출석 하나를 보강 수업에서 떼어 대기실로 돌린다(담당강사도 비움).
+// 보강 출석 하나를 지운다 = 그 보강 출석 [삭제]: 원래 결석의 `보강 출석`을 비워 보강 대기에 다시 뜨게 하고 보강 수업 명단에서도 뺀다.
 export async function unlinkMakeup(attendanceId: string) {
 	if (!isId(attendanceId)) throw new ClassRoomError(400, "출석 형식이 올바르지 않습니다.")
 	const attendance = await getPage(attendanceId) as Page
-	const sessionId = rel(attendance, "수업")[0]
-	if (!sessionId) return { ok: true }
-	const session = await getPage(sessionId) as Page
-	if (!isMakeupSession(session)) throw new ClassRoomError(409, "정규 수업의 출석은 여기서 뗄 수 없습니다.")
-	const regs = rel(attendance, "등록")
-	await updatePageProperties(attendanceId, { "수업": relation([]), "담당강사": relation([]), ...touched() })
-	await updatePageProperties(sessionId, {
-		"출석": relation(rel(session, "출석").filter((id) => id !== attendanceId)),
-		"등록": relation(rel(session, "등록").filter((id) => !regs.includes(id))),
-	})
-	await mirrorJobs([["cr_attendance", [attendanceId]], ["cr_sessions", [sessionId]]]) // 복사본 함께 쓰기(v2.5.115)
-	return { ok: true }
+	if (!rel(attendance, ORIGINAL_ABSENCE).length) throw new ClassRoomError(409, "보강 출석(기존 결석이 있는 출석)만 여기서 뺄 수 있습니다.")
+	if (isDeletingFlagSet(attendance)) return { ok: true, status: "already_processing" }
+	await queueCascadeDelete(attendanceId)
+	return { ok: true, status: "queued" }
 }
 
-// 보강 수업을 지운다(휴지통). 학습기록이 있으면 막고, 연결된 출석은 먼저 떼어 대기실로 돌린다.
-// 기존 [삭제] 버튼(cascade-delete)은 출석까지 지우므로 쓰지 않는다.
+// 보강 수업을 지운다 = 그 수업 [삭제]: 보강 출석까지 휴지통, 원래 결석은 보강 대기로 돌아오고 `보강 수업`도 비워진다.
+// 학습기록이 있으면 막는다(노션 [삭제]는 기록까지 지우므로 앱에서는 먼저 확인).
 export async function deleteMakeupSession(sessionId: string) {
 	if (!isId(sessionId)) throw new ClassRoomError(400, "수업 형식이 올바르지 않습니다.")
 	const session = await getPage(sessionId) as Page
 	if (!isMakeupSession(session)) throw new ClassRoomError(409, "보강 수업만 여기서 지울 수 있습니다.")
 	if (rel(session, "학습기록").length) throw new ClassRoomError(409, "이 보강 수업에 학습기록이 있어요. 기록을 먼저 지워 주세요.")
-	const attendanceIds = rel(session, "출석")
-	await mapWithConcurrency(attendanceIds, 3, (id) => updatePageProperties(id, { "수업": relation([]), "담당강사": relation([]), ...touched() }))
-	await archivePage(sessionId)
-	await removePages([sessionId]) // 복사본 함께 쓰기(v2.5.115)
-	await mirrorJobs([["cr_attendance", attendanceIds]])
-	return { ok: true, released: attendanceIds.length }
+	if (isDeletingFlagSet(session)) return { ok: true, status: "already_processing" }
+	await queueCascadeDelete(sessionId)
+	return { ok: true, status: "queued", attendances: rel(session, "출석").length }
 }
 
 // ---------- 요청 처리 ----------
@@ -985,8 +1054,83 @@ export async function loadRecordBody(recordId: string) {
 	return { recordId, body: await readPageBodyBlocks(recordId) }
 }
 
+// ---------- (2.8 하루 수업 페이지, 앱서버 261118) 수업 안내 메모·루틴 체크 ----------
+export const SESSION_NOTICE_MEMO = "수업 안내 메모"
+// 수업 안내 메모 쓰기(보내기는 하지 않음 — 수업 [수업 안내 전송]이 따로).
+export async function updateSession(body: any) {
+	if (!isId(body?.sessionId)) throw new ClassRoomError(400, "수업 형식이 올바르지 않습니다.")
+	if (body.notice === undefined) throw new ClassRoomError(400, "바꿀 내용이 없습니다.")
+	const saved = await updatePageProperties(body.sessionId, { [SESSION_NOTICE_MEMO]: richText(String(body.notice ?? "")) }) as Page
+	await mirrorSaved("cr_sessions", [saved])
+	return { saved: 1, notice: plain(saved, SESSION_NOTICE_MEMO).trim() }
+}
+export const routineDeps = { getPage, getPages: (ids: string[]) => getPages(ids), fullRelationIds }
+// 이 수업의 루틴 체크(수업 '루틴 체크' 관계): 루틴 이름·출석·등록·완료. 루틴을 안 쓰는 학원(칸 없음)은 빈 목록.
+export async function loadRoutines(sessionId: string) {
+	if (!isId(sessionId)) throw new ClassRoomError(400, "수업 형식이 올바르지 않습니다.")
+	const session = await routineDeps.getPage(sessionId) as Page
+	if (!session?.properties?.["루틴 체크"]) return { sessionId, available: false, status: "", checks: [] }
+	const checkIds = await routineDeps.fullRelationIds(session, "루틴 체크")
+	const checks = await routineDeps.getPages(checkIds)
+	const routines = new Map((await routineDeps.getPages(dedupe(checks.map((c) => rel(c, "루틴")[0]).filter(Boolean) as string[])))
+		.map((r: Page) => [r.id as string, { name: anyTitleText(r), order: numberOf(r, "순서") }]))
+	return {
+		sessionId,
+		available: true,
+		status: propText(session.properties?.["루틴 체크 상태"]).trim(),
+		checks: checks.filter((c) => !c.archived && !c.in_trash).map((c) => {
+			const r = routines.get(rel(c, "루틴")[0])
+			return {
+				checkId: c.id as string,
+				routineId: rel(c, "루틴")[0] ?? null,
+				routineName: r?.name ?? "",
+				order: r?.order ?? null,
+				attendanceId: rel(c, "출석")[0] ?? null,
+				registrationId: rel(c, "등록")[0] ?? null,
+				done: checkboxValue(c, "완료") === true,
+			}
+		}).sort((a, b) => (a.order ?? 999) - (b.order ?? 999) || a.routineName.localeCompare(b.routineName, "ko")),
+	}
+}
+// (2.8, 담당 261118) 루틴 체크 했음/안 했음: 루틴 체크 줄의 `완료` 칸만 쓴다(보내기 없음).
+// 루틴 체크 줄이 아닌 페이지(완료 체크·루틴 관계가 없음)는 쓰지 않는다. 학부모 리포트가 다음 재계산 때 바뀐 값을 싣도록
+// 그 줄의 출석에 "학습정보 수정일"을 적는다(출석 저장과 같은 방식).
+export async function saveRoutines(items: unknown) {
+	if (!Array.isArray(items) || items.length === 0 || items.length > MAX_ITEMS) throw new ClassRoomError(400, "저장할 내용이 없습니다.")
+	const wants = items.map((it: any) => {
+		if (!isId(it?.checkId) || typeof it?.done !== "boolean") throw new ClassRoomError(400, "루틴 체크 형식이 올바르지 않습니다.")
+		return { id: it.checkId as string, done: it.done as boolean }
+	})
+	const pages = await routineDeps.getPages(wants.map((w) => w.id))
+	const byId = new Map(pages.map((p: Page) => [String(p.id).replaceAll("-", ""), p]))
+	for (const w of wants) {
+		const p = byId.get(w.id.replaceAll("-", ""))
+		if (!p || p.archived || p.in_trash || p.properties?.["완료"]?.type !== "checkbox" || !p.properties?.["루틴"]) throw new ClassRoomError(400, "루틴 체크 줄이 아닙니다.")
+	}
+	await mapWithConcurrency(wants, 3, (w) => updatePageProperties(w.id, { "완료": { checkbox: w.done } }))
+	const attendanceIds = dedupe(wants.flatMap((w) => rel(byId.get(w.id.replaceAll("-", "")) as Page, "출석")))
+	await mapWithConcurrency(attendanceIds, 3, (id) => updatePageProperties(id, touched()).catch((err: unknown) =>
+		console.warn("[class-room] 루틴 체크 뒤 출석 수정일 건너뜀:", id, (err as Error).message)))
+	return { saved: wants.length }
+}
+
+// [루틴 체크 생성]과 같은 길(create-class-reports/routine-checks와 같은 잠금 → ⏳ 대기열 → 큐 routine-checks).
+export async function createRoutineChecks(sessionId: string) {
+	if (!isId(sessionId)) throw new ClassRoomError(400, "수업 형식이 올바르지 않습니다.")
+	const page = await getPage(sessionId)
+	if (isRunning(page, ROUTINE_STATUS_SPEC)) return { sessionId, queued: false, message: "already_processing" }
+	await markQueued(sessionId, ROUTINE_STATUS_SPEC)
+	await enqueueSync(TARGET_ROUTINE_CHECKS, { sessionId })
+	wakeSyncQueueWorker()
+	return { sessionId, queued: true }
+}
+
 export async function handleClassRoom(body: any): Promise<unknown> {
 	switch (body?.action) {
+		case "update-session": return await updateSession(body)
+		case "routines": return await loadRoutines(body.sessionId)
+		case "create-routine-checks": return await createRoutineChecks(body.sessionId)
+		case "save-routines": return await saveRoutines(body.items)
 		case "teachers": return { teachers: await listTeachers() }
 		case "day": return await loadDay(String(body.date ?? ""), body.teacherId)
 		case "days": return await loadDays(String(body.from ?? ""), String(body.to ?? ""), body.teacherId)
@@ -1005,6 +1149,8 @@ export async function handleClassRoom(body: any): Promise<unknown> {
 		case "create-records": return await createRecords(body)
 		case "update-record": return await updateRecord(body)
 		case "create-activities": return await createActivities(body.recordId)
+		case "makeup-waiting": return await loadMakeupWaiting()
+		case "assign-makeup": return await assignMakeupAction(body)
 		case "create-makeup-session": return await createMakeupSession(body)
 		case "unlink-makeup": return await unlinkMakeup(body.attendanceId)
 		case "delete-makeup-session": return await deleteMakeupSession(body.sessionId)

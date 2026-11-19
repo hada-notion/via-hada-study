@@ -31,6 +31,10 @@ import { isRunning, markQueued, markRunning, markDone, markError, STATUS_DONE, t
 import { removeLater } from "./classRoomCopy.ts"
 import { decideRecordRemoval } from "./learningRecordShare.ts"
 import { isMakeupSession } from "./sessionKind.ts"
+import { enqueueSync, wakeSyncQueueWorker } from "./syncQueue.ts"
+import { syncAttendanceForRegistration } from "./attendanceSyncShared.ts"
+import { syncReportCacheForRegistration } from "./reportCacheBuilder.ts"
+import { makePageCache } from "./reportCacheShared.ts"
 // (2026-09-21, 이식성 리팩토링) 위 7개 데이터소스 ID는 이 파일에 직접 하드코딩돼 있었는데, 이제
 // constants.ts 한 곳에서 환경변수로 읽어와 공유한다 (constants.ts 상단 주석 참고). export하지 않아도
 // 되도록 이 파일 밖에서 이 이름들을 가져다 쓰는 곳이 없는지 확인했다.
@@ -119,6 +123,15 @@ export async function markDeletingQueued(pageId: string): Promise<void> {
   }
 }
 
+// [삭제] 버튼과 같은 길 하나: ⏳ 대기열 표시 → 큐 "cascade-delete" → 워커 깨우기. cascade-delete 함수(노션 버튼)와
+// 관리 앱 보강 지우기(class-room unlink-makeup·delete-makeup-session, v2.8.0 항목 92)가 같이 쓴다.
+export const TARGET_CASCADE_DELETE = "cascade-delete"
+export async function queueCascadeDelete(pageId: string): Promise<void> {
+  await markDeletingQueued(pageId)
+  await enqueueSync(TARGET_CASCADE_DELETE, { pageId })
+  wakeSyncQueueWorker()
+}
+
 export async function markDeletingRunning(pageId: string): Promise<void> {
   try {
     await markRunning(pageId, CASCADE_DELETE_STATUS_SPEC)
@@ -188,6 +201,7 @@ export async function cascadeDelete(
   depth = 0,
   resumeNote?: string,
   kidPage?: any,
+  touchedRegs?: Set<string>,
 ): Promise<void> {
   if (depth > MAX_CASCADE_DEPTH) {
     log.push(`⚠️ 최대 재귀 깊이(${MAX_CASCADE_DEPTH})를 초과하여 중단함: ${pageId}`)
@@ -272,7 +286,7 @@ export async function cascadeDelete(
               }
             }
 
-            await cascadeDelete(kid.id, log, visited, depth + 1, undefined, kid)
+            await cascadeDelete(kid.id, log, visited, depth + 1, undefined, kid, touchedRegs)
           })
         }),
       )
@@ -297,11 +311,42 @@ export async function cascadeDelete(
       await archivePage(pageId, isMakeupAttendance ? makeupLink : undefined)
     }
     removeLater([pageId]) // 수업 관리 복사본에서도 지운다(v2.5.115, 수업·출석·학습기록·학습활동이면)
+    // (v2.8.0 항목 93) 학부모 리포트에 보이는 줄(출석·학습기록·학습활동)을 지웠으면 그 학생 리포트를 뒤에서 다시 만든다.
+    if (touchedRegs && dataSourceId && REPORT_DBS().has(dataSourceId)) relIds(page.properties?.["등록"]).forEach((id: string) => touchedRegs.add(id))
     log.push(`${indent}🗑️ [${name}] 삭제되어 휴지통으로 이동됨`)
   } catch (err) {
     if (depth === 0) await markDeletingError(pageId, (err as Error).message)
     throw err
   }
+}
+
+// (v2.8.0 항목 93, 원본 검수 261119) [삭제](노션 버튼·관리 앱 보강 빼기)로 출석·학습기록·학습활동을 지운 뒤, 그 학생의 출석 사본
+// (attendance_records)과 학부모 리포트 캐시를 다시 만든다 — 전에는 다음 동기화·밤 대조 전까지 지운 기록이 리포트에 남았다.
+// 리포트 링크(토큰)가 있는 등록만(새 링크는 만들지 않음 — 링크 발급은 [학생 페이지 동기화]만). 실패해도 지우기는 끝난 것이라 로그만.
+const REPORT_DBS = () => new Set([DS_ATTENDANCE, DS_STUDY_RECORD, DS_STUDY_ACTIVITY].filter(Boolean))
+export const cascadeReportDeps = {
+  getPage: (id: string) => getPage(id),
+  syncAttendance: (regId: string) => syncAttendanceForRegistration(regId),
+  syncReport: (regId: string) => syncReportCacheForRegistration(regId, makePageCache()),
+}
+export async function refreshReportsAfterDelete(regIds: Iterable<string>, log: string[]): Promise<number> {
+  let done = 0
+  for (const regId of new Set(regIds)) {
+    try {
+      const reg = await cascadeReportDeps.getPage(regId)
+      if (reg?.archived || reg?.in_trash) continue
+      const token = (reg?.properties?.["토큰"]?.rich_text ?? []).map((t: any) => t?.plain_text ?? "").join("").trim()
+      if (!token) continue
+      await cascadeReportDeps.syncAttendance(regId)
+      await cascadeReportDeps.syncReport(regId)
+      done++
+      log.push(`🔄 학부모 리포트 다시 만듦: ${regId}`)
+    } catch (err) {
+      console.error("cascade-delete: 리포트 다시 만들기 실패(다음 동기화가 맞춤):", regId, (err as Error).message)
+      log.push(`⚠️ 리포트 다시 만들기 실패: ${regId} ${(err as Error).message}`)
+    }
+  }
+  return done
 }
 
 // process-sync-queue 워커가 target: "cascade-delete" 작업을 처리할 때 호출하는 진입점
@@ -310,8 +355,10 @@ export async function cascadeDelete(
 // throw해서 process-sync-queue가 재시도 여부(최대 3회)를 판단하게 한다.
 export async function processCascadeDeleteQueueItem(payload: { pageId: string }): Promise<void> {
   const log: string[] = []
+  const touchedRegs = new Set<string>()
   try {
-    await cascadeDelete(payload.pageId, log, new Set<string>(), 0)
+    await cascadeDelete(payload.pageId, log, new Set<string>(), 0, undefined, undefined, touchedRegs)
+    await refreshReportsAfterDelete(touchedRegs, log)
     console.log("cascade-delete (queue) finished:", payload.pageId, "\n", log.join("\n"))
   } catch (err) {
     console.error(

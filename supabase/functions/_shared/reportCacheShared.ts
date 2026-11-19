@@ -283,6 +283,29 @@ export async function selectReportCacheByToken(token: string): Promise<ReportCac
   return rows[0] ?? null
 }
 
+// (2.8, 261118 원본 검수) 지금 이 일정을 싣고 있는 리포트의 등록 id. 일정의 대상이 바뀌거나 비공개가 되면
+// 지금 관계로는 옛 대상 학생을 찾을 수 없으므로, 캐시에 남긴 notice_ids로 찾아 다시 만든다(그래야 빠진다).
+// notice_ids가 없는 옛 캐시(#453 배포 전에 만든 줄)는 실린 일정의 제목·날짜(title·date)가 같은 줄로 찾는다
+// (이름까지 함께 바꾼 경우는 못 찾음 — 다음 재계산부터 notice_ids로).
+export function noticeCacheQueries(noticeId: string, title?: string, date?: string): string[] {
+  const q = [`student_fields->notice_ids=cs.${encodeURIComponent(JSON.stringify([noticeId]))}`]
+  if (title && date) q.push(`student_fields->notice_ids=is.null&student_fields->notices=cs.${encodeURIComponent(JSON.stringify([{ title, date }]))}`)
+  return q
+}
+export async function selectRegistrationIdsByNoticeId(noticeId: string, title?: string, date?: string): Promise<string[]> {
+  requireSupabaseEnv()
+  const out = new Set<string>()
+  for (const query of noticeCacheQueries(noticeId, title, date)) {
+    const res = await fetchSupabaseWithRetry(
+      `${SB_URL}/rest/v1/report_cache?select=registration_id&${query}`,
+      { headers: { apikey: SB_SERVICE_ROLE_KEY, Authorization: `Bearer ${SB_SERVICE_ROLE_KEY}` } },
+    )
+    if (!res.ok) throw new Error(`report_cache 일정 조회 실패: ${res.status} ${await res.text()}`)
+    for (const r of (await res.json()) as any[]) if (r?.registration_id) out.add(r.registration_id)
+  }
+  return [...out]
+}
+
 // [FIX, 2026-09-19] 형제 등록 목록을 조회할 때 registration_overview만 가져와서, 프론트엔드가
 // 화면에 열려 있는 등록(예: 다른 형제의 반)에 대해 "지금 바로 동기화" 요청을 보낼 registrationId를
 // 알 방법이 없었다. registration_id도 함께 select해서 각 overview 객체에 얹어준다.

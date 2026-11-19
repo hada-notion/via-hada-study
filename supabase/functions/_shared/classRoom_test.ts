@@ -3,6 +3,7 @@ function assert(value: unknown, message = "assertion failed") { if (!value) thro
 for (const [key, value] of Object.entries({ NOTION_TOKEN: "test-only", CLASS_ROOM_COPY_WRITE: "off", SB_URL: "https://mock.supabase", DATA_SOURCE_CLASS_SESSION_ID: "sessions", DATA_SOURCE_ATTENDANCE_ID: "attendance", DATA_SOURCE_LEARNING_RECORD_ID: "records", DATA_SOURCE_STUDY_ACTIVITY_ID: "activities", DATA_SOURCE_PROGRESS_BOOK_ID: "books", DATA_SOURCE_REGISTRATION_ID: "registrations" })) Deno.env.set(key, value)
 const room = await import("./classRoom.ts")
 const sel = await import("./selectedUnits.ts")
+const attMemo = await import("./attendanceMemo.ts")
 const rel = (...ids: string[]) => ({ relation: ids.map((id) => ({ id })) })
 const title = (s: string) => ({ type: "title", title: [{ plain_text: s, text: { content: s } }] })
 const text = (s: string) => ({ type: "rich_text", rich_text: s ? [{ plain_text: s, text: { content: s } }] : [] })
@@ -56,11 +57,17 @@ function fixture() {
   if (url.endsWith("/data_sources/records")) return reply({ properties: pages.__noUnitsProp ? {} : { "선택 단원": { type: "relation" } } })
   const blk = url.match(/\/blocks\/([^/]+)\/children/)?.[1]
   if (blk) return reply({ results: pages[blk]?.blocks ?? [], has_more: false })
+  // 출석 메모 이름(v2.8.0 항목 62): 이 가짜 출석 DB에 있는 이름은 pages.__attMemo(기본 예전 이름 `메모`). 다른 이름이면 Notion처럼 400.
+  const attMemo = pages.__attMemo ?? "메모", otherMemo = attMemo === "메모" ? "메모(내부용)" : "메모"
   const db = url.match(/\/data_sources\/([^/]+)\/query/)?.[1]
+  if (db === "attendance" && JSON.stringify(body.filter ?? {}).includes(JSON.stringify({ property: otherMemo }).slice(1, -1))) return reply({ message: `Could not find property with name or id: ${otherMemo}` }, 400)
   if (db) { queries.push({ db, filter: body.filter }); return reply({ results: Object.values(pages).filter((p) => p.db === db && !p.archived && cond(p, body.filter)), has_more: false }) }
   const id = url.match(/\/pages\/([^/?]+)/)?.[1]
   if (id) {
    if (!pages[id]) return reply({ message: "missing " + id }, 404)
+   if (init.method === "PATCH" && pages[id].db === "attendance" && body.properties?.[otherMemo] !== undefined) return reply({ message: `${otherMemo} is not a property that exists.` }, 400)
+   // 학습활동 메모 이름(v2.8.0 항목 64): pages.__actMemo(기본 예전 이름 `메모`). 다른 이름이면 400.
+   { const am = pages.__actMemo ?? "메모", ao = am === "메모" ? "메모(내부용)" : "메모"; if (init.method === "PATCH" && pages[id].db === "activities" && body.properties?.[ao] !== undefined) return reply({ message: `${ao} is not a property that exists.` }, 400) }
    if (init.method === "PATCH") { writes.push({ id, body }); Object.assign(pages[id].properties, body.properties ?? {}); if (body.archived) pages[id].archived = true }
    return reply(pages[id])
   }
@@ -71,6 +78,7 @@ function fixture() {
 }
 async function withMock(run: (f: ReturnType<typeof fixture>) => Promise<void>) {
  const f = fixture(), original = globalThis.fetch
+ attMemo.resetAttMemoName()
  globalThis.fetch = f.fetch as typeof fetch
  try { await run(f) } finally { globalThis.fetch = original }
 }
@@ -159,6 +167,9 @@ Deno.test("roster: school, grade and phones from the student page, priority phon
  // v2.6.9: 학생정보 페이지(↗)와 연락처 전체
  assert(a.studentId === "stA" && a.primary === "기타 보호자" && a.motherPhone === "010-0000-0004" && a.fatherPhone === "" && a.guardianPhone === "010-0000-0002" && a.guardianRelation === "할아버지", JSON.stringify(a))
  assert(b.studentId === null && b.primary === "" && b.motherPhone === "", "no student page: " + JSON.stringify(b))
+ // v2.0.0: 학생과의 관계가 선택 칸이어도 같은 값
+ f.pages.stA.properties["학생과의 관계"] = { type: "select", select: { name: "조부모" } }
+ assert((await room.loadRoster("s1")).students[0].guardianRelation === "조부모", "select relation")
  assert(b.reportToken === null && b.reportOff && b.school === "" && b.parentPhone === "", "disabled report link gives no token: " + JSON.stringify(b))
  await rejects(() => room.loadRoster("../x"), 400)
 }))
@@ -238,6 +249,7 @@ Deno.test("records: group book links the class, repeat returns the existing reco
  const r1 = await room.createRecords({ sessionId: "s1", kind: "학습", bookIds: ["group"] })
  const rec = f.created[0]; assert(r1.records[0].created && ids(rec, "등록") === "ra,rb" && ids(rec, "출석") === "aa,ab" && ids(rec, "교재") === "regular" && ids(rec, "과목") === "math")
  assert(rec.properties["학습"].title[0].text.content === "[학습] 개념원리 1-2 · 중1 B 10.13(화)" && rec.properties["보강"] === undefined && rec.properties["학습정보 수정일"])
+ assert(ids(rec, "클래스") === "cls", "v2.8.0 item 81: the record carries the session's class")
  f.pages.s1.properties["학습기록"] = rel(rec.id)
  const r2 = await room.createRecords({ sessionId: "s1", kind: "학습", bookIds: ["group"] })
  assert(!r2.records[0].created && r2.records[0].id === rec.id && f.created.length === 1)
@@ -298,17 +310,12 @@ Deno.test("save attendance and activities: validated, stamped for the report syn
  assert(h1.status === "제출" && h1.submitted && h1.memo === "" && h2.status === "일부 제출" && !h2.submitted && h2.memo === "절반만", JSON.stringify(acts))
  assert(room.homeworkState("🔴 미제출") === "미제출" && room.homeworkState(null) === "" && room.homeworkState("일부 제출") === "일부 제출")
 }))
-Deno.test("makeup: create a session, unlink, and delete without touching attendance pages", () => withMock(async (f) => {
- const m = await room.createMakeupSession({ attendanceIds: ["wait1"], teacherId: "t1", start: "2026-10-13T06:00:00.000Z" })
- const s = f.pages[m.sessionId]; assert(s.properties["수업 구분"].select.name === "보강" && s.properties["보강"] === undefined && ids(s, "등록") === "rc" && ids(s, "출석") === "wait1" && s.properties["시간표"] === undefined && s.properties["클래스"] === undefined)
- assert(s.properties["이름"].title[0].text.content === "보강 10.13(화) 15:00" && ids(f.pages.wait1, "수업") === m.sessionId && ids(f.pages.wait1, "담당강사") === "t1")
- await rejects(() => room.createMakeupSession({ attendanceIds: ["wait1"], teacherId: "t1", start: "2026-10-13T06:00:00.000Z" }), 409)
- await rejects(() => room.unlinkMakeup("aa"), 409) // regular session
- await room.unlinkMakeup("wait1"); assert(ids(f.pages.wait1, "수업") === "" && ids(f.pages.wait1, "담당강사") === "" && ids(f.pages[m.sessionId], "출석") === "")
- f.pages[m.sessionId].properties["학습기록"] = rel("rec0"); await rejects(() => room.deleteMakeupSession(m.sessionId), 409)
- f.pages[m.sessionId].properties["학습기록"] = rel(); f.pages[m.sessionId].properties["출석"] = rel("wait1"); f.pages.wait1.properties["수업"] = rel(m.sessionId)
- const del = await room.deleteMakeupSession(m.sessionId); assert(del.released === 1 && f.pages[m.sessionId].archived && !f.pages.wait1.archived && ids(f.pages.wait1, "수업") === "")
+// (v2.8.0 항목 92) 보강은 v2.8 노션 모델(결석 → [보강 배정] → 기존 결석)로 — 시험은 makeupAssign_test.ts.
+Deno.test("makeup: old-model calls are refused (attendance without 기존 결석, attendanceIds), regular sessions untouched", () => withMock(async (f) => {
+ await rejects(() => room.createMakeupSession({ attendanceIds: ["wait1"], teacherId: "t1", start: "2026-10-13T06:00:00.000Z" }), 400)
+ await rejects(() => room.unlinkMakeup("wait1"), 409)
  await rejects(() => room.deleteMakeupSession("s1"), 409) // regular session
+ assert(f.created.length === 0 && !f.pages.s1.archived)
 }))
 Deno.test("unknown actions and malformed ids are rejected", () => withMock(async () => {
  await rejects(() => room.handleClassRoom({ action: "drop-all" }), 400)
@@ -322,8 +329,51 @@ Deno.test("student space: recent homework, scored tests and past memos for the r
  f.pages.aOld = { id: "aOld", db: "attendance", properties: { "등록": rel("ra"), "수업일시": { date: { start: "2026-10-10T08:00:00.000Z" } }, "메모": text("지각 15분") } }
  const s = await room.loadStudent("ra")
  assert(s.homework.length === 1 && s.homework[0].submitted && s.homework[0].due === "2026-10-13" && s.homework[0].range === "p.31-35")
+ // v2.8.0 항목 81: 마감일 수식이 글자(string)로 와도 날짜 모양이면 읽고, 아니면 비움
+ f.pages.hw1.properties["과제 마감일"] = { type: "formula", formula: { type: "string", string: "2026-10-14" } }
+ assert((await room.loadStudent("ra")).homework[0].due === "2026-10-14", "string date formula")
+ f.pages.hw1.properties["과제 마감일"] = { type: "formula", formula: { type: "string", string: "dddd-dd-dd" } }
+ assert((await room.loadStudent("ra")).homework[0].due === null, "non-date string")
  assert(s.tests.length === 1 && s.tests[0].correct === 18 && s.tests[0].total === 20)
  assert(s.memos.map((m) => m.memo).sort().join() === "지각 15분,집중 좋음")
+}))
+Deno.test("v2.8.0 항목 62 attendance memo: old 메모 still works, renamed 메모(내부용) is read, queried and written; activity 메모 unchanged", () => withMock(async (f) => {
+ // 예전 이름 학원: 새 이름으로 먼저 보내고 400이면 `메모`로 다시 쓴다. 그다음부터는 바로 `메모`.
+ const before = (await room.loadSession("s1")).students.find((s: any) => s.attendanceId === "aa")!
+ assert(before.memo === "집중 좋음", "old name read")
+ await room.saveAttendance([{ attendanceId: "aa", memo: "예전 이름" }])
+ assert(f.writes.at(-1)!.body.properties["메모"].rich_text[0].text.content === "예전 이름" && f.writes.at(-1)!.body.properties["메모(내부용)"] === undefined)
+ const n = f.writes.length; await room.saveAttendance([{ attendanceId: "aa", memo: "두 번째" }])
+ assert(f.writes.length === n + 1 && f.pages.aa.properties["메모"].rich_text[0].text.content === "두 번째", "learned old name")
+ // 이름을 바꾼 학원
+ attMemo.resetAttMemoName()
+ f.pages.__attMemo = "메모(내부용)"
+ for (const id of ["aa", "ab"]) { const p = f.pages[id].properties; p["메모(내부용)"] = p["메모"]; delete p["메모"] }
+ f.pages.aa.properties["메모(내부용)"] = text("새 이름 메모")
+ const after = (await room.loadSession("s1")).students.find((s: any) => s.attendanceId === "aa")!
+ assert(after.memo === "새 이름 메모", "new name read: " + JSON.stringify(after))
+ await room.saveAttendance([{ attendanceId: "ab", memo: "병결", status: "🔴 결석" }])
+ const w = f.writes.at(-1)!.body.properties
+ assert(w["메모(내부용)"].rich_text[0].text.content === "병결" && w["메모"] === undefined && w["출석 상태"].select.name === "🔴 결석", JSON.stringify(w))
+ const st = await room.loadStudent("ra")
+ assert(st.memos.map((m) => m.memo).join() === "새 이름 메모", JSON.stringify(st.memos))
+ assert(f.queries.some((q) => q.db === "attendance" && JSON.stringify(q.filter).includes('"property":"메모(내부용)"')))
+ // 학습활동 메모는 이름이 그대로 `메모`
+ await room.saveActivities([{ activityId: "hw2", memo: "활동 메모" }])
+ const wa = f.writes.at(-1)!.body.properties; assert(wa["메모"].rich_text[0].text.content === "활동 메모" && wa["메모(내부용)"] === undefined)
+}))
+
+Deno.test("v2.8.0 항목 64 activity memo: renamed 메모(내부용) is written and read, old 메모 still works", () => withMock(async (f) => {
+ room.resetActivityMemoName()
+ await room.saveActivities([{ activityId: "hw1", memo: "예전" }])
+ assert(f.writes.at(-1)!.body.properties["메모"].rich_text[0].text.content === "예전", "old name")
+ room.resetActivityMemoName()
+ f.pages.__actMemo = "메모(내부용)"
+ for (const id of ["hw1", "hw2"]) { const p = f.pages[id].properties; delete p["메모"] }
+ await room.saveActivities([{ activityId: "hw2", memo: "새 이름" }])
+ const w = f.writes.at(-1)!.body.properties
+ assert(w["메모(내부용)"].rich_text[0].text.content === "새 이름" && w["메모"] === undefined, JSON.stringify(w))
+ room.resetActivityMemoName()
 }))
 
 // v2.5.126: 학습기록 "선택 단원"
@@ -354,4 +404,62 @@ Deno.test("records: academies without 선택 단원 keep working and say units w
  const r = await room.createRecords({ sessionId: "s1", kind: "학습", bookIds: ["group"], unitIds: [U1], unitBookId: "regular" })
  assert(r.unitsSaved === false && f.created[0].properties["선택 단원"] === undefined)
  sel.resetSelectedUnitsEnabled()
+}))
+
+// ---------- (2.8 하루 수업 페이지, 앱서버 261118) ----------
+Deno.test("day/session: 수업 구분·학습 내용·처리 상태·오류·시간표, 수업 안내, 출석 보고서 전송 상태", () => withMock(async (f) => {
+ Object.assign(f.pages.s1.properties, {
+  "수업 구분": { type: "select", select: { name: "보강" } }, "학습 내용": formula("개념원리 p.78-83"),
+  "실시간 처리 상태": formula("🔄 출석 조정 중"), "마지막 오류": text("예시 오류"), "시간표": rel("tt1"),
+  "수업 안내 메모": text("교재 챙기기"), "수업 안내 현황": formula("미발송"), "수업 안내 미리보기": formula("안녕하세요…"),
+ })
+ f.pages.aa.properties["보고서 전송 상태"] = { type: "select", select: { name: "✅ 완료" } }
+ const day = await room.loadDay("2026-10-13", "t1")
+ const d = day.sessions[0] as any
+ assert(d.kind === "보강" && d.summary === "개념원리 p.78-83" && d.busy === "🔄 출석 조정 중" && d.error === "예시 오류" && d.blockId === "tt1", JSON.stringify(d))
+ const s = await room.loadSession("s1") as any
+ assert(s.session.notice === "교재 챙기기" && s.session.noticeStatus === "미발송" && s.session.noticePreview === "안녕하세요…" && s.session.kind === "보강", JSON.stringify(s.session))
+ const a = s.students.find((x: any) => x.attendanceId === "aa"), b = s.students.find((x: any) => x.attendanceId === "ab")
+ assert(a.reportStatus === "✅ 완료" && b.reportStatus === "")
+}))
+Deno.test("save-attendance: 등·하원 시각 고치기(ISO, 빈 값은 비우기), 형식이 틀리면 400", () => withMock(async (f) => {
+ await room.saveAttendance([{ attendanceId: "aa", arrivedAt: "2026-10-13T07:55:00.000Z", leftAt: "" }])
+ const w = f.writes.at(-1).body.properties
+ assert(w["등원스템프"].date.start === "2026-10-13T07:55:00.000Z" && w["하원스템프"].date === null, JSON.stringify(w))
+ await rejects(() => room.saveAttendance([{ attendanceId: "aa", arrivedAt: "17:55" }]), 400)
+}))
+Deno.test("update-session: 수업 안내 메모만 쓴다(보내기 없음)", () => withMock(async (f) => {
+ const r = await room.handleClassRoom({ action: "update-session", sessionId: "s1", notice: "다음 주 시험" }) as any
+ assert(r.saved === 1 && r.notice === "다음 주 시험")
+ const w = f.writes.at(-1); assert(w.id === "s1" && Object.keys(w.body.properties).join() === "수업 안내 메모")
+ await rejects(() => room.handleClassRoom({ action: "update-session", sessionId: "s1" }), 400)
+}))
+Deno.test("routines: 수업의 루틴 체크(이름·출석·완료, 순서대로), 칸 없는 학원은 빈 목록, 생성은 이미 도는 중이면 다시 넣지 않음", () => withMock(async (f) => {
+ const none = await room.handleClassRoom({ action: "routines", sessionId: "s1" }) as any
+ assert(none.available === false && none.checks.length === 0)
+ Object.assign(f.pages, {
+  rt1: { id: "rt1", db: "routines", properties: { "이름": title("단어 암기"), "순서": { type: "number", number: 2 } } },
+  rt2: { id: "rt2", db: "routines", properties: { "이름": title("일기"), "순서": { type: "number", number: 1 } } },
+  ck1: { id: "ck1", db: "checks", properties: { "이름": title("단어 암기 · aa"), "루틴": rel("rt1"), "출석": rel("aa"), "등록": rel("ra"), "완료": { type: "checkbox", checkbox: true } } },
+  ck2: { id: "ck2", db: "checks", properties: { "이름": title("일기 · aa"), "루틴": rel("rt2"), "출석": rel("aa"), "등록": rel("ra"), "완료": { type: "checkbox", checkbox: false } } },
+ })
+ f.pages.s1.properties["루틴 체크"] = rel("ck1", "ck2")
+ f.pages.s1.properties["루틴 체크 상태"] = { type: "select", select: { name: "🔄 작업중" } }
+ const r = await room.handleClassRoom({ action: "routines", sessionId: "s1" }) as any
+ assert(r.available && r.status === "🔄 작업중" && r.checks.map((c: any) => `${c.routineName}:${c.done}`).join() === "일기:false,단어 암기:true", JSON.stringify(r))
+ const q = await room.handleClassRoom({ action: "create-routine-checks", sessionId: "s1" }) as any
+ assert(q.queued === false && q.message === "already_processing")
+ await rejects(() => room.handleClassRoom({ action: "create-routine-checks", sessionId: "../x" }), 400)
+}))
+Deno.test("save-routines: 루틴 체크 줄의 완료만 쓰고 출석 수정일을 적는다, 루틴 체크가 아니면·형식이 틀리면 400", () => withMock(async (f) => {
+ Object.assign(f.pages, {
+  ck1: { id: "ck1", db: "checks", properties: { "이름": title("단어 암기 · aa"), "루틴": rel("rt1"), "출석": rel("aa"), "완료": { type: "checkbox", checkbox: false } } },
+ })
+ const r = await room.handleClassRoom({ action: "save-routines", items: [{ checkId: "ck1", done: true }] }) as any
+ assert(r.saved === 1 && f.pages.ck1.properties["완료"].checkbox === true)
+ const ckWrite = f.writes.find((w: any) => w.id === "ck1"); assert(Object.keys(ckWrite.body.properties).join() === "완료")
+ assert(f.writes.some((w: any) => w.id === "aa" && w.body.properties["학습정보 수정일"]), "출석 수정일")
+ await rejects(() => room.handleClassRoom({ action: "save-routines", items: [{ checkId: "aa", done: true }] }), 400) // 출석 줄은 루틴 체크가 아님
+ await rejects(() => room.handleClassRoom({ action: "save-routines", items: [{ checkId: "ck1", done: "yes" }] }), 400)
+ await rejects(() => room.handleClassRoom({ action: "save-routines", items: [] }), 400)
 }))

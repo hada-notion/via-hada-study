@@ -7,21 +7,27 @@
 // 그다음 `python -I scripts/notion-spec.py hada-scan.json <출력 폴더>`로 정리하고,
 // 원본 명세와 `python -I scripts/notion-diff.py`로 비교한다.
 //
-// - Notion 화면이 쓰는 내부 읽기 API(syncRecordValuesMain)만 부른다. 아무것도 쓰지 않는다.
+// - Notion 화면이 쓰는 내부 읽기 API(syncRecordValuesMain·queryCollection)만 부른다. 아무것도 쓰지 않는다.
 // - 웹훅 헤더는 이름만 남기고 값은 버린다. 서버 주소는 <HOST>로 바꾼다.
 // - 환경마다 다른 ID(컬렉션·속성·스페이스)는 이름으로 바꾸고 버린다.
+// - 브라우저에 노션 계정이 여러 개 로그인돼 있으면 노션이 다른 계정으로 읽어 빈 결과가 나온다.
+//   그래서 처음에 이 페이지를 편집할 수 있는 계정(읽기 공유만 된 계정은 버튼·자동화 동작을 못 읽음)을 찾아 그 계정 헤더(x-notion-active-user-header,
+//   x-notion-space-id)를 모든 요청에 붙인다. 못 찾으면 window.HADA_SCAN_USER에 사용자 id를 넣고 다시 실행한다.
 (async () => {
+  let HDR = {};
+  const API = (path, body) => fetch(path, {
+    method: 'POST', headers: { 'content-type': 'application/json', ...HDR }, body: JSON.stringify(body),
+  });
+  // 권한이 없으면 노션은 { role: 'none' }만 돌려준다. 그것은 레코드로 보지 않는다.
+  const pick = (x) => x?.value?.value || (x?.value?.id ? x.value : null);
   const REQ = async (table, ids) => {
     const out = {};
     for (let i = 0; i < ids.length; i += 50) {
-      const r = await fetch('/api/v3/syncRecordValuesMain', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ requests: ids.slice(i, i + 50).map((id) => ({ pointer: { table, id }, version: -1 })) }),
-      });
+      const r = await API('/api/v3/syncRecordValuesMain', { requests: ids.slice(i, i + 50).map((id) => ({ pointer: { table, id }, version: -1 })) });
       Object.assign(out, (await r.json()).recordMap?.[table] || {});
     }
     const vals = {};
-    for (const [id, x] of Object.entries(out)) { const v = x?.value?.value || x?.value; if (v) vals[id] = v; }
+    for (const [id, x] of Object.entries(out)) { const v = pick(x); if (v) vals[id] = v; }
     return vals;
   };
   const text = (t) => (t || []).map((x) => x[0]).join('');
@@ -31,6 +37,32 @@
   // 페이지 대신 다른 app.notion.com 주소에서 실행할 때는 window.HADA_SCAN_PAGE에 공개 DB 페이지 id를 넣는다
   const pageId = (window.HADA_SCAN_PAGE || location.pathname.match(/[0-9a-f]{32}/)?.[0] || '').replace(/-/g, '');
   const dashed = (h) => h.replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+  // 0) 이 페이지를 편집할 수 있는 로그인 계정 찾기(계정이 하나면 헤더 없이 그대로 간다)
+  // 읽기 공유된 페이지(예: 4주 따라하기 가이드)는 다른 계정도 "reader"로 읽히지만, 버튼·자동화 동작
+  // (automation_action)은 워크스페이스 편집 계정만 읽힌다. 그래서 "읽힘"이 아니라 "편집 권한"으로 고른다.
+  const probe = async () => (await (await API('/api/v3/syncRecordValuesMain', { requests: [{ pointer: { table: 'block', id: dashed(pageId) }, version: -1 }] })).json()).recordMap?.block?.[dashed(pageId)];
+  const canEdit = (x) => !!pick(x) && !['none', 'reader', 'comment_only'].includes(x?.value?.role || 'reader');
+  const first = await probe();
+  if (!canEdit(first)) {
+    const cookie = (n) => decodeURIComponent((document.cookie.split('; ').find((c) => c.startsWith(n + '=')) || '').slice(n.length + 1));
+    const spaceId = first?.spaceId || first?.value?.spaceId || pick(first)?.space_id || window.HADA_SCAN_SPACE;
+    let users = [];
+    try { users = JSON.parse(cookie('notion_users') || '[]'); } catch (e) { users = []; }
+    users = [window.HADA_SCAN_USER, cookie('notion_user_id'), ...users].filter((u, i, a) => u && a.indexOf(u) === i);
+    let readOnly = pick(first) ? {} : null; // 편집 계정이 없을 때 쓸 읽기 계정 헤더
+    let found = false;
+    for (const u of users) {
+      HDR = { 'x-notion-active-user-header': u, ...(spaceId ? { 'x-notion-space-id': spaceId } : {}) };
+      const x = await probe();
+      if (canEdit(x)) { found = true; break; }
+      if (pick(x) && !readOnly) readOnly = HDR;
+    }
+    if (!found) {
+      if (!readOnly) throw new Error('이 페이지를 읽을 수 있는 로그인 계정을 찾지 못했습니다. 이 워크스페이스 계정으로 로그인했는지 확인하고, 계정이 여러 개면 window.HADA_SCAN_USER에 그 계정 사용자 id를 넣어 다시 실행하세요.');
+      HDR = readOnly;
+      console.warn('[hada-scan] 이 페이지를 편집할 수 있는 계정이 없어 읽기 권한으로 스캔합니다. 버튼·자동화 동작이 { missing: true }로 나올 수 있습니다. 워크스페이스 편집 계정으로 로그인하거나 window.HADA_SCAN_USER를 지정하세요.');
+    }
+  }
   const collIds = new Set();
   const seen = new Set();
   let frontier = [dashed(pageId)];
@@ -69,12 +101,9 @@
     const ptrs = [];
     list.forEach((c) => (c.additional_property_ids || []).forEach((id) => ptrs.push({ table: 'collection_property_schema', id, spaceId: c.space_id })));
     for (let i = 0; i < ptrs.length; i += 50) {
-      const r = await fetch('/api/v3/syncRecordValuesMain', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ requests: ptrs.slice(i, i + 50).map((p) => ({ pointer: p, version: -1 })) }),
-      });
+      const r = await API('/api/v3/syncRecordValuesMain', { requests: ptrs.slice(i, i + 50).map((p) => ({ pointer: p, version: -1 })) });
       for (const x of Object.values((await r.json()).recordMap?.collection_property_schema || {})) {
-        const v = x?.value?.value || x?.value;
+        const v = pick(x);
         const c = v && v.alive !== false && v.parent_table === 'collection' && cols[v.parent_id];
         if (c && v.property_short_id && v.property_schema) c.schema = { ...(c.schema || {}), [v.property_short_id]: v.property_schema };
       }
@@ -236,12 +265,9 @@
   const REQP = async (ptrs, table) => {
     const out = {};
     for (let i = 0; i < ptrs.length; i += 50) {
-      const r = await fetch('/api/v3/syncRecordValuesMain', {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ requests: ptrs.slice(i, i + 50).map((p) => ({ pointer: p, version: -1 })) }),
-      });
+      const r = await API('/api/v3/syncRecordValuesMain', { requests: ptrs.slice(i, i + 50).map((p) => ({ pointer: p, version: -1 })) });
       const m = (await r.json()).recordMap?.[table] || {};
-      for (const [id, x] of Object.entries(m)) { const v = x?.value?.value || x?.value; if (v) out[id] = v; }
+      for (const [id, x] of Object.entries(m)) { const v = pick(x); if (v) out[id] = v; }
     }
     return out;
   };
@@ -342,13 +368,10 @@
   const menuViewId = menuCid ? (blocks[cols[menuCid]?.parent_id]?.view_ids || [])[0]
     || ((await REQ('block', [cols[menuCid]?.parent_id].filter(Boolean)))[cols[menuCid]?.parent_id]?.view_ids || [])[0] : null;
   if (menuCid && menuViewId) {
-    const qr = await (await fetch('/api/v3/queryCollection?src=initial_load', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        source: { type: 'collection', id: menuCid, spaceId: space },
-        collectionView: { id: menuViewId, spaceId: space },
-        loader: { type: 'reducer', reducers: { results: { type: 'results', limit: 500 } }, searchQuery: '', userTimeZone: 'Asia/Seoul' },
-      }),
+    const qr = await (await API('/api/v3/queryCollection?src=initial_load', {
+      source: { type: 'collection', id: menuCid, spaceId: space },
+      collectionView: { id: menuViewId, spaceId: space },
+      loader: { type: 'reducer', reducers: { results: { type: 'results', limit: 500 } }, searchQuery: '', userTimeZone: 'Asia/Seoul' },
     })).json();
     const rowIds = qr?.result?.reducerResults?.results?.blockIds || [];
     const rows = await REQ('block', rowIds);

@@ -1,4 +1,4 @@
-import { academicRange, sameOwnedEvent, buttonSchoolId } from "./neisManual.ts"
+import { academicRange, sameOwnedEvent,retryDelayMs, buttonSchoolId } from "./neisManual.ts"
 import { ownedProperties, type NeisRow } from "./neisSchool.ts"
 function assert(v: unknown,message="assertion failed"){if(!v)throw new Error(message)}
 Deno.test("한국시간 3월 1일에 학년도 전환",()=>{
@@ -25,4 +25,22 @@ Deno.test("숨김/메모를 바꿔도 원본 동기화 내용은 동일",()=>{
  assert(sameOwnedEvent(page,row,"school","key",["g2"]))
  assert(!sameOwnedEvent(page,{...row,EVENT_CNTNT:"새 내용"},"school","key",["g2"]))
  assert(!sameOwnedEvent(page,row,"school","key",["g3"]))
+})
+
+Deno.test("사람이 고친 구분은 다시 가져와도 그대로(같은 일정으로 보고 쓰지 않음)",()=>{
+ const row:NeisRow={AA_YMD:"20261002",EVENT_NM:"중간고사",EVENT_CNTNT:"",SBTR_DD_SC_NM:"해당없음",TW_GRADE_EVENT_YN:"Y"}
+ const properties:any=ownedProperties(row,"school","key",["g2"])
+ assert(!("구분" in properties))
+ for(const cat of ["🏫 학교 행사","🏫 학사 일정","📆 학원 일정"]){
+  const page={properties:{...properties,"구분":{select:{name:cat}},"잠금":{checkbox:false}}}
+  assert(sameOwnedEvent(page,row,"school","key",["g2"]),cat)
+ }
+})
+
+Deno.test("노션 한도(429)면 길게 기다렸다 이어서, 그 밖은 짧게",()=>{
+ assert(retryDelayMs("Notion API 오류 429",1)===10000)
+ assert(retryDelayMs("data_sources query 429 Too Many Requests",2)===20000)
+ assert(retryDelayMs("Notion API 오류 429",5)===20000)
+ assert(retryDelayMs("학년 중복: 2",1)===1500)
+ assert(retryDelayMs("Notion API 오류 4290",1)===1500)
 })

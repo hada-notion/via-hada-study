@@ -1,5 +1,5 @@
-import { isParentPublicEvent, publicNoticeFields, NOTICE_VISIBILITY_POLICY } from "./scheduleVisibility.ts"
-import { buildStudentNotices, clearNoticeCache, noticeDeps } from "./reportCacheBuilder.ts"
+import { isParentPublicEvent, publicNoticeFields, noticeReportSyncNotNeeded, NOTICE_VISIBILITY_POLICY } from "./scheduleVisibility.ts"
+import { buildStudentNotices, clearNoticeCache, noticeDeps, withFreshNotices } from "./reportCacheBuilder.ts"
 function assert(v: unknown, msg = "assertion failed") { if (!v) throw new Error(msg) }
 function event(hidden: unknown = false, published: unknown = true, category = "📆 학원 일정"): any {
  return {id:"event", properties:{"숨김":{type:"checkbox",checkbox:hidden},"학부모 공개":{type:"checkbox",checkbox:published},"구분":{type:"select",select:{name:category}},"날짜":{type:"date",date:{start:new Date().toISOString().slice(0,10)}},"이름":{type:"title",title:[{plain_text:"공개 행사"}]}}}
@@ -11,7 +11,7 @@ Deno.test("공개/숨김 누락과 잘못된 값은 비공개",()=>{
  assert(!isParentPublicEvent({properties:{}}))
 })
 Deno.test("할일/미지정 구분은 공개하지 않음",()=>{for(const c of ["✅ 할일","","내부 일정"]) assert(!isParentPublicEvent(event(false,true,c)))})
-Deno.test("학원/학사/휴원은 공개 조건 적용",()=>{for(const c of ["📆 학원 일정","🏫 학사 일정","💤 휴원"]) assert(isParentPublicEvent(event(false,true,c)))})
+Deno.test("학원/학교(새 세 값·옛 학사)/휴원은 공개 조건 적용",()=>{for(const c of ["📆 학원 일정","🏫 학교 행사","📝 시험","🏖️ 방학/휴교","🏫 학사 일정","💤 휴원"]) assert(isParentPublicEvent(event(false,true,c)))})
 Deno.test("삭제/아카이브 일정은 비공개",()=>{for(const k of ["archived","in_trash"]) assert(!isParentPublicEvent({...event(),[k]:true}))})
 Deno.test("기존 캐시 일정 제거/다른 학생 필드 유지",()=>{const f=publicNoticeFields({student_name:"가상학생",notices:[{title:"직원회의"}]});assert(JSON.stringify(f.notices)==="[]");assert(f.student_name==="가상학생")})
 Deno.test("정책 확인된 캐시는 일정 보존/내부 정책값 비노출",()=>{const notices=[{title:"설명회"}];const f=publicNoticeFields({notice_visibility_policy:NOTICE_VISIBILITY_POLICY,notices});assert(f.notices===notices);assert(!("notice_visibility_policy" in f));assert(JSON.stringify(publicNoticeFields({notice_visibility_policy:NOTICE_VISIBILITY_POLICY,notices:null}).notices)==="[]")})
@@ -50,4 +50,47 @@ Deno.test("학교 일정이 많아도 학교 페이지 관계(25개 제한)를 �
 Deno.test("학원 전체 일정(연결 없음)은 모든 학생에게, 다른 반 일정은 제외",async()=>{
  const all=event();all.id="all";const other=event();other.id="other";other.properties["클래스"]=rel(["other-class"])
  const n=await noticesFor({all,other},{});assert(n.length===1&&n[0].title==="공개 행사")
+})
+
+Deno.test("리포트 반영 건너뜀: 비공개 나이스 일정 + 마지막 편집 봇일 때만",()=>{
+ const neis=(hidden:boolean,published:boolean,editor:string,key="NEIS-1")=>{const e=event(hidden,published,"🏫 학교 행사");e.properties["NEIS 동기화키"]={type:"rich_text",rich_text:key?[{plain_text:key}]:[]};e.last_edited_by={object:"user",id:editor};return e}
+ // 나이스가 새로 만든 줄(숨김·비공개, 봇) → 건너뜀
+ assert(noticeReportSyncNotNeeded(neis(true,false,"bot"),"bot"))
+ assert(noticeReportSyncNotNeeded(neis(false,false,"bot"),"bot"))
+ // 공개 중이면 반영(내용이 바뀌었을 수 있음)
+ assert(!noticeReportSyncNotNeeded(neis(false,true,"bot"),"bot"))
+ // 사람이 공개를 끈 편집은 반영(리포트에서 빼야 함)
+ assert(!noticeReportSyncNotNeeded(neis(true,false,"person"),"bot"))
+ // 나이스 일정이 아니면(학원 일정 등) 반영
+ assert(!noticeReportSyncNotNeeded(neis(true,false,"bot",""),"bot"))
+ // 봇 ID를 모르면 반영(안전한 쪽)
+ assert(!noticeReportSyncNotNeeded(neis(true,false,"bot"),null))
+ // 일정이 아닌 페이지는 건드리지 않음
+ assert(!noticeReportSyncNotNeeded({properties:{"토큰":{type:"rich_text",rich_text:[]}},last_edited_by:{id:"bot"}},"bot"))
+})
+
+Deno.test("학부모 응답에는 notice_ids(일정 페이지 id)를 싣지 않음",()=>{
+ const f=publicNoticeFields({notice_visibility_policy:NOTICE_VISIBILITY_POLICY,notices:[{title:"a"}],notice_ids:["id-1"],student_name:"가상학생"})
+ assert(!("notice_ids" in f) && (f.notices as any[]).length===1)
+})
+
+Deno.test("대상을 A → B로 바꾼 직후 조회가 옛 결과(A)를 돌려줘도 A 리포트엔 싣지 않음(지금 관계로 다시 봄)",async()=>{
+ const moved=event();moved.id="moved";moved.properties["학생"]=rel(["B"])
+ clearNoticeCache()
+ // 조회는 바뀌기 전처럼 "학생 contains A"에 이 일정을 돌려준다(Notion 색인 늦음 흉내)
+ noticeDeps.query=(async(_ds:string,filter:any)=>{const r=filter.and.find((f:any)=>f.relation);return r&&r.property==="학생"&&r.relation.contains==="A"?[moved]:[]}) as any
+ const n=await buildStudentNotices("A",{},async id=>({id,properties:{}}))
+ assert(n.length===0,JSON.stringify(n))
+})
+
+Deno.test("조회가 바뀌기 전 속성까지 돌려줘도, 방금 바뀐 일정 값(웹훅 본문)으로 A에서 빼고 B에 싣는다",async()=>{
+ const stale=event();stale.id="moved";stale.properties["학생"]=rel(["A"])      // 조회가 주는 옛 모습
+ const fresh=event();fresh.id="moved";fresh.properties["학생"]=rel(["B"])      // 웹훅 본문의 새 모습
+ clearNoticeCache()
+ noticeDeps.query=(async(_ds:string,filter:any)=>{const r=filter.and.find((f:any)=>f.relation);return r&&r.property==="학생"&&r.relation.contains==="A"?[stale]:[]}) as any
+ const getA=withFreshNotices(async (id:string)=>({id,properties:{}}),[fresh])
+ assert((await buildStudentNotices("A",{},getA)).length===0)
+ clearNoticeCache()
+ const getB=withFreshNotices(async (id:string)=>({id,properties:{}}),[fresh])
+ assert((await buildStudentNotices("B",{},getB)).length===1)
 })

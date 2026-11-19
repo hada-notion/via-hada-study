@@ -1,5 +1,6 @@
 import { queryAllPages, mapWithConcurrency, pickProp } from "./notionClient.ts"
 import { routineRowsForRegistration, type RoutineRow } from "./routineCheck.ts"
+import { EVENT_NOTICE_MEMO, propKey } from "./propAlias.ts"
 import { readPageBodyBlocks } from "./feedBody.ts"
 import { buildLetterList } from "./reportLetter.ts"
 import { parseTokenValue } from "./adminShared.ts"
@@ -20,6 +21,7 @@ import {
   type ReportCacheRow,
 } from "./reportCacheShared.ts"
 import { isParentPublicEvent, NOTICE_VISIBILITY_POLICY } from "./scheduleVisibility.ts"
+import { eventKind, kindDisplay } from "./scheduleCategory.ts"
 import { selectAttendanceByRegistrationId } from "./attendanceSyncShared.ts"
 import { DS_ATTENDANCE, DS_STUDY_ACTIVITY, DS_REPORT, DS_SCHEDULE_EVENT } from "./constants.ts"
 import { libraryIds } from "./libraryProp.ts"
@@ -37,6 +39,14 @@ function sinceIsoMonthsAgo(months: number): string {
 
 function todayIsoSeoul(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" })
+}
+
+// 리포트 "이번 달" 출석 요약: 수업 날짜와 오늘을 둘 다 서울 날짜로 보고 같은 달인지(261119 9시간 점검 —
+// 서버는 UTC라 매달 1일 0~9시엔 지난달로, 1일 아침 9시 전 수업은 지난달로 셌다).
+export function inSeoulMonth(iso: string | null | undefined, todayIso: string): boolean {
+  if (!iso) return false
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso : kstDateOf(iso)
+  return !!day && day.slice(0, 7) === todayIso.slice(0, 7)
 }
 
 // 학습기록 페이지 본문(블록) → 리포트 피드 부록 변환은 feedBody.ts로 옮겼다(v2.5.95, 수업 관리 기록 카드와 함께 쓴다).
@@ -57,6 +67,15 @@ async function shareQueriedPages(pages: any[], cachedGetPage: (id: string) => Pr
 // 주므로 학사일정을 많이 가져온 학교(예: 한 해 200건)는 최근 일정이 빠져 리포트에 나오지 않았다.
 // 학원 전체 일정(클래스·학생·학교·학년이 모두 빈 공개 일정)도 여기서 함께 모은다. 같은 실행 안에서는 기준마다 한 번만 조회한다(1분).
 export const noticeDeps = { query: queryAllPages }
+// 일정 리포트 반영(sync-report-cache)이 방금 바뀐 일정 페이지를 페이지 읽기 함수에 붙여 넘긴다(freshNotices).
+// 같은 반영 안에서 다시 만드는 모든 리포트가 그 값을 쓴다.
+export function withFreshNotices<T extends (id: string) => Promise<any>>(getPage: T, pages: any[]): T {
+  (getPage as any).freshNotices = pages.filter((p) => p?.id && p?.properties)
+  return getPage
+}
+function freshNoticesOf(getPage: unknown): any[] {
+  return ((getPage as any)?.freshNotices ?? []) as any[]
+}
 const noticeQueryCache = new Map<string, { at: number; pages: Promise<any[]> }>()
 export function clearNoticeCache() { noticeQueryCache.clear() }
 function publicEvents(link: { prop: "학생" | "클래스" | "학교" | "학년"; id: string } | null, sinceIso: string): Promise<any[]> {
@@ -104,17 +123,32 @@ export async function buildStudentNotices(
     schoolId ? publicEvents({ prop: "학교", id: schoolId }, sinceIso) : Promise.resolve([]),
     gradeId ? publicEvents({ prop: "학년", id: gradeId }, sinceIso) : Promise.resolve([]),
   ])
-  const directIds = new Set<string>([...studentEvents, ...classEvents, ...academyEvents].map((n: any) => n.id))
+  // 어느 조회에서 왔는지는 믿지 않고 일정의 지금 관계로 다시 본다(261118 원본 검수): 대상을 A → B로 바꾼 직후에는
+  // Notion 관계 조회(학생 contains A)가 한동안 바뀌기 전 결과를 돌려줘, A 리포트를 다시 만들어도 일정이 남았다.
+  // 학교·학년 조회에서 온 일정만 아래 학교·학년 맞추기로 본다.
+  const schoolGradeIds = new Set<string>([...schoolEvents, ...gradeEvents].map((n: any) => n.id))
   const byId = new Map<string, any>()
   for (const n of [...studentEvents, ...classEvents, ...academyEvents, ...schoolEvents, ...gradeEvents]) byId.set(n.id, n)
+  // 방금 바뀐 일정(웹훅 본문·직접 읽은 값)은 조회 결과보다 먼저 쓴다 — 조회는 바뀌기 전 속성을 한동안 돌려준다(261118 원본 검수 2회).
+  // 조회에 아직 안 나온 새 대상(B)에게도 싣는다. 학교·학년이 있으면 학교·학년 맞추기로 본다.
+  for (const f of freshNoticesOf(cachedGetPage)) {
+    byId.set(f.id, f)
+    if (relationIds(f.properties?.["학교"]).length || relationIds(f.properties?.["학년"]).length) schoolGradeIds.add(f.id)
+  }
   const noticePages = await shareQueriedPages(Array.from(byId.values()), cachedGetPage)
+  const plainId = (id: string) => String(id ?? "").replaceAll("-", "").toLowerCase()
+  const activeClassKeys = new Set(activeClassIds.map(plainId))
 
   return noticePages
     .filter((n: any) => {
       if (!isParentPublicEvent(n)) return false
       const startIso = dateStartOf(n.properties["날짜"])
       if (!startIso || startIso < sinceIso) return false
-      if (directIds.has(n.id)) return true
+      const linkedStudents = relationIds(n.properties["학생"]).map(plainId)
+      const linkedClasses = relationIds(n.properties["클래스"]).map(plainId)
+      if (linkedStudents.includes(plainId(studentId)) || linkedClasses.some((id) => activeClassKeys.has(id))) return true
+      if (["학생", "클래스", "학교", "학년"].every((k) => relationIds(n.properties[k]).length === 0)) return true // 학원 전체
+      if (!schoolGradeIds.has(n.id)) return false
       const noticeSchoolIds = relationIds(n.properties["학교"])
       const noticeGradeIds = relationIds(n.properties["학년"])
       const schoolMatch = noticeSchoolIds.length === 0 || (!!schoolId && noticeSchoolIds.includes(schoolId))
@@ -123,13 +157,16 @@ export async function buildStudentNotices(
     })
     .map((n: any) => {
       const np = n.properties
-      const category = text(np["구분"])
+      // (2.8 2단계) 리포트 화면의 색·아이콘·나이스 출처 표시는 묶음 이름(💤 휴원·🏫 학사 일정·📆 학원 일정)으로 정해지므로
+      // 세부 구분(옛 구분 포함)을 그 묶음으로 바꿔 싣는다(scheduleCategory.kindDisplay).
+      const category = kindDisplay(eventKind(n))
       const icon = category.split(" ")[0] || "📌"
       const start = dateStartOf(np["날짜"])
       const end = dateEndOf(np["날짜"])
       const range = start ? (end && end !== start ? `${fmtDateKr(start)} ~ ${fmtDateKr(end)}` : fmtDateKr(start)) : ""
-      const memo = text(np["메모"])
+      const memo = text(np[propKey(np, EVENT_NOTICE_MEMO)]) // `일정 안내 메모`(예전 `메모`, v2.8.0 항목 64)
       return {
+        id: n.id as string,
         icon,
         category,
         date: start,
@@ -173,10 +210,14 @@ async function buildStudentFields(studentId: string, cachedGetPage: (id: string)
     }),
   )
 
-  const [notices, letters] = await Promise.all([
+  const [noticesWithId, letters] = await Promise.all([
     buildStudentNotices(studentId, sp, cachedGetPage),
     buildLetterList(relationIds(sp["등록"])),
   ])
+  // 일정 id는 학부모 응답에 싣지 않고 따로(notice_ids) 둔다 — 일정이 대상에서 빠지거나 비공개가 되면 그 일정을 가진
+  // 리포트를 이 목록으로 찾아 다시 만든다(sync-report-cache). 학부모 응답에서는 publicNoticeFields가 뺀다.
+  const notice_ids = noticesWithId.map((n) => n.id)
+  const notices = noticesWithId.map(({ id: _id, ...rest }) => rest)
 
   return {
     student_name: studentName,
@@ -187,6 +228,7 @@ async function buildStudentFields(studentId: string, cachedGetPage: (id: string)
     primary_contact: primaryContact,
     siblings,
     notices,
+    notice_ids,
     letters,
     notice_visibility_policy: NOTICE_VISIBILITY_POLICY,
     issued_at: new Date().toISOString(),
@@ -354,11 +396,7 @@ export async function buildRegistrationDetail(reg: any, cachedGetPage: (id: stri
     .filter((e) => e.iso)
     .sort((a, b) => (a.iso! < b.iso! ? 1 : -1))
 
-  const now = new Date()
-  const thisMonthEntries = attendanceEntries.filter((e) => {
-    const d = new Date(e.iso!)
-    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
-  })
+  const thisMonthEntries = attendanceEntries.filter((e) => inSeoulMonth(e.iso, todayIso))
   const attendance_summary = {
     present: thisMonthEntries.filter((e) => e.status === "출석").length,
     makeup: thisMonthEntries.filter((e) => e.status === "보강").length,

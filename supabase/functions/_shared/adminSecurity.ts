@@ -7,6 +7,8 @@ export const SECURITY_WEBHOOK_ROUTES = new Set([
   'sync-attendance','sync-class-report-cache','sync-class-room-copy','sync-dashboard-link',
   'sync-registration-textbook','sync-report-cache',
   'sync-school-calendar','sync-textbook-distribution','toggle-report-link',
+  // (2.8, 261118) 시험정보 [시험 기간 연결].
+  'link-exam-period',
   // (v2.8.0, 261111) 웹훅 길잡이: 모든 Notion 버튼·자동화가 같은 주소로 보내면 기존 함수로 넘긴다(관리자 설정 체크리스트 항목은 아님).
   'notion-router',
 ]);
@@ -15,6 +17,8 @@ export const SECURITY_WEBHOOK_ROUTES = new Set([
 // so a leaked browser session cannot reach them (v2.5.51).
 export const SECURITY_BROWSER_ROUTES = new Set([
   'list-students','kiosk-checkin','get-legal-document-data','school-api','textbook-api','class-room','clear-example-data',
+  // (v2.8.0 항목 74) 관리 앱 읽기: 복사본(app_rows) 목록만 돌려준다. Notion에 쓰지 않는다.
+  'app-api',
 ]);
 export function securityEnabled(): boolean { return Deno.env.get('ADMIN_SECURITY_ENABLED') === 'true'; }
 export class SecurityError extends Error {
