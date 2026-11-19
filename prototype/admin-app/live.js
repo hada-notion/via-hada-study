@@ -46,7 +46,7 @@ window.liveModeFor = function (search, hostname, protocol) {
   const EVW = gOn.has("P2") && gOn.has("P2e"); window.LIVE_EVW = EVW;
   /* 보강 쓰기(칸 P3m — 화면 묶음 없음, 보강 화면 칸 P3b와 함께 켤 때만, 261119 담당 (가)): 켜면 보강 화면이 보기만에서 빠지고 [저장]이 서버 보강 동작(livelesson.js liveMakeupSave)으로 */
   const MKW = gOn.has("P3b") && gOn.has("P3m"); window.LIVE_MKW = MKW;
-  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "books", "schools"].filter((s) => !(EVW && s === "events") && !(MKW && s === "makeup"))); /* P3 수업은 걸음 1 = 보기만 */
+  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "schools"].filter((s) => !(EVW && s === "events") && !(MKW && s === "makeup"))); /* P3 수업은 걸음 1 = 보기만 */
   window.liveRO = (s) => RO.has(s);
   window.liveScr = (t) => (t && t.screen === "timetable" && t.state && t.state.view === "lesson" ? "lesson" : t ? t.screen : "");
   let roBase = null, roScreen = null, roBusy = false;
@@ -71,14 +71,18 @@ window.liveModeFor = function (search, hostname, protocol) {
   document.head.appendChild(roCss);
   /* 보기 전용 화면 안내(261119 대표 "보기 중심인 화면에만 안내, 나머지는 다 사용 가능"): 시험 · 수강료 · 청구서 · 손익 분석 · 법정 서류만 제목 줄 아래 작은 회색 한 줄(토스트 아님 · 닫기 없음).
      어느 화면인지는 이 목록 한 곳이 기준 — 목록에 없는 화면(수업 · 일정 · 학생 · 클래스 · 등록 …)에는 보기만 칸이어도 안 뜬다 */
-  const RO_NOTE_SCREENS = new Set(["exams", "tuition", "bill", "bookfees", "charges", "etcs", "profit", "costs", "legal"]);
+  const RO_NOTE_SCREENS = new Set(["exams", "tuition", "bill", "bookfees", "charges", "etcs", "profit", "costs", "legal", "schools", "records", "reports", "completion", "letters", "files", "alims"]);
   const RO_NOTE_TEXT = "이 화면은 보기만 해요 — 고칠 것은 노션에서 고쳐요";
-  const roNote = (show) => {
+  /* 261119 대표("라이브러리 [+] · [연필]이 막혀 있다"): [+] · [연필]이 꺼진 화면은 이유를 한 줄로 — 라이브러리 · 학교는 노션 버튼이 서버 동작(교재 단원 · 학교 코드)까지 해서 앱에서 직접 추가하지 않음 */
+  const RO_NOTE_BY = { schools: "학교는 보기만 해요 — 학교 추가는 노션 학교 페이지의 [학교 검색]에서 해요(학교 코드까지 가져와요)" };
+  const roNote = (show, scr) => {
     const v = document.getElementById("view"); if (!v) return;
     let n = v.querySelector(":scope > .ro-line");
     if (!show) { if (n) n.remove(); return; }
     const top = v.querySelector(":scope > .top"); if (!top) return;
-    if (!n) { n = document.createElement("div"); n.className = "ro-line"; n.textContent = RO_NOTE_TEXT; }
+    const txt = RO_NOTE_BY[scr] || RO_NOTE_TEXT;
+    if (n && n.textContent !== txt) n.textContent = txt;
+    if (!n) { n = document.createElement("div"); n.className = "ro-line"; n.textContent = txt; }
     if (top.nextElementSibling !== n) top.after(n);
   };
   const roDress = () => {
@@ -100,7 +104,7 @@ window.liveModeFor = function (search, hostname, protocol) {
   const roLock = () => {
     const t = typeof activeTab !== "undefined" ? activeTab : null, scr = liveScr(t), on = !!(t && window.LIVE && window.LIVE.loaded && RO.has(scr));
     document.body.classList.toggle("live-ro", on);
-    roNote(on && RO_NOTE_SCREENS.has(scr));
+    roNote(on && RO_NOTE_SCREENS.has(scr), scr);
     if (!on) { roBase = null; roScreen = null; return; }
     const now = snapRo();
     if (roBase === null || roScreen !== scr) { roBase = now; roScreen = scr; }
@@ -261,6 +265,7 @@ window.liveModeFor = function (search, hostname, protocol) {
       pw.onkeydown = (e) => { if (e.key === "Enter") submit(); };
       setTimeout(() => pw.focus(), 0);
     });
+    window.liveReload = go; /* 교재 등록처럼 서버가 직접 만든 자료를 다시 받을 때 */
     session ? go() : ask();
   }
   setTimeout(start, 0);
@@ -312,11 +317,152 @@ function liveHooks() {
   toast = (msg) => {
     const m = String(msg), tag = /\s*\(시제품: 노션에 쓰지 않음\)/;
     if (window.LIVE && tag.test(m)) {
-      if (!window._liveSaving && pending()) { setTimeout(() => liveSave(), 0); return; }
-      return toast0(m.replace(tag, ""));
+      /* 서버에 쓰는 길은 창 [저장](그 창의 줄만)과 위 [저장](모두) 둘뿐 — 예전에는 이 알림이 뜰 때마다 모두 저장했다(자동 저장). 이제 창이 열려 있으면 그 줄만, 아니면 저장하지 않고 위 [저장]을 안내한다 */
+      if (window._liveSaving) return toast0(m.replace(tag, ""));
+      const sel = typeof activeTab !== "undefined" && activeTab && activeTab.state ? activeTab.state.sel : null;
+      let hit = null;
+      if (sel) for (const coll of APPS_ORDER) { const r = (DB[coll] || []).find((x) => x && x.id === sel); if (r) { hit = { coll, r }; break; } }
+      if (hit && pending()) { setTimeout(() => liveSaveRow({ coll: hit.coll }, hit.r), 0); return; }
+      return toast0(m.replace(tag, "") + (pending() ? " — 위 [저장]을 눌러 노션에 저장해요" : ""));
     }
     toast0(m);
   };
+  /* [동기화] 버튼(261119 대표 "느려도 정확하게"): 우측 상단 [저장] 옆. render 뒤마다 붙이고, 마지막 동기화 시각은 서버 status의 syncedAt으로 */
+  try { const render0 = render; render = function () { const o = render0.apply(this, arguments); try { liveSyncMount(); } catch (_) {} return o; }; } catch (_) {}
+  setTimeout(() => { try { liveSyncStatus(); } catch (_) {} }, 3000);
+  /* 메뉴 [N] 주소를 미리 받아 둔다(누를 때 새 탭이 팝업으로 막히지 않게) — 못 받아도 누를 때 다시 시도 */
+  setTimeout(() => { try { liveMenuPages().catch(() => {}); } catch (_) {} }, 2500);
+  /* 라이브러리(교재) 입력(261119 대표): [+] = 새 교재 등록 창(서버 textbook-api register-custom — 교재 + 단원목록을 노션에), 줄·표 편집은 저장의 update. 프로그램은 노션에서 */
+  try {
+    bookFindOpen = () => liveBookRegisterOpen();
+    LISTS.books_b.add = LISTS.books.add = () => liveBookRegisterOpen();
+    LISTS.books_b.addLabel = "교재 등록";
+    LISTS.books_p.add = null; LISTS.books_p.blank = null; LISTS.books_p.noAddWhy = "프로그램은 노션 라이브러리에서 추가해요";
+  } catch (_) {}
+}
+/* 새 교재 등록 창(실제 자료 모드): 교재명 · 출판사 · 시리즈 · 가격 · 전체 분량 · ISBN13 · 단원 목록(한 줄에 하나 "이름 쪽"). 과목 · 구분 등은 등록 뒤 줄 창에서.
+   서버(textbook-api register-custom)가 거절하면 사람 말로 보여 주고 창은 열어 둔다(같은 ISBN13 = 409). 성공하면 저장 안 한 변경이 없을 때 노션 자료를 다시 받아 목록에 바로 나타낸다 */
+async function liveBookApi(body) {
+  const c = window.LIVE;
+  if (!c) throw new Error("노션 자료를 받은 뒤에 등록해요");
+  const res = await fetch(String(c.url).replace(/\/+$/, "") + "/functions/v1/textbook-api", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-admin-key": c.session, Authorization: "Bearer " + c.anonKey, apikey: c.anonKey },
+    body: JSON.stringify(body),
+  });
+  const out = await res.json().catch(() => null);
+  if (!res.ok || !out || out.error) { const e = new Error((out && out.error) || "요청 실패 (" + res.status + ")"); e.status = res.status; throw e; }
+  return out;
+}
+function liveBookRegisterOpen() {
+  const F = { title: "", publisher: "", series: "", price: "", pages: "", isbn: "", units: "" };
+  const opts = (k) => (DB.opts && Array.isArray(DB.opts[k]) ? DB.opts[k] : []).map((v) => ({ v, t: v }));
+  modal(`<h2>교재 등록${HELP("노션 라이브러리에 교재 1권과 단원 목록을 만들어요. 과목 · 구분 등은 등록한 뒤 줄 창에서 넣어요. 같은 ISBN의 교재가 이미 있으면 등록되지 않아요. 출판사 · 시리즈는 노션 선택지에 있는 값만 고를 수 있어요.")}</h2>
+    <div class="hfgrid nc"><div class="hfh" id="brT"></div><div class="hfh" id="brP"></div><div class="hfh" id="brS"></div><div class="hfh" id="brPr"></div><div class="hfh" id="brPg"></div><div class="hfh" id="brI"></div></div>
+    <div class="hfh" id="brU"></div><div class="hint" id="brM"></div>
+    <div class="actions"><span class="sp"></span><button class="btn" id="brC">취소</button><button class="btn pri" id="brO" disabled>교재 등록</button></div>`, (m, close) => {
+    const ok = m.querySelector("#brO"), msg = m.querySelector("#brM");
+    const upd = () => { ok.disabled = !F.title.trim(); };
+    HF.text(m.querySelector("#brT"), { label: "교재명", placeholder: "예: 쎈 고등 수학(상)", max: 200, onChange: (v) => { F.title = v; upd(); } });
+    HF.select(m.querySelector("#brP"), { label: "출판사", value: null, clear: true, placeholder: "고르기", items: opts("pub"), onChange: (v) => { F.publisher = v || ""; } });
+    HF.select(m.querySelector("#brS"), { label: "시리즈", value: null, clear: true, placeholder: "고르기", items: opts("series"), onChange: (v) => { F.series = v || ""; } });
+    HF.num(m.querySelector("#brPr"), { label: "가격", unit: "원", onChange: (v) => { F.price = String(v || "").replace(/[^\d]/g, ""); } });
+    HF.num(m.querySelector("#brPg"), { label: "전체 분량", unit: "쪽", onChange: (v) => { F.pages = String(v || "").replace(/[^\d]/g, ""); } });
+    HF.text(m.querySelector("#brI"), { label: "ISBN13", placeholder: "978으로 시작하는 13자리", max: 17, onChange: (v) => { F.isbn = v; } });
+    HF.memo(m.querySelector("#brU"), { label: "단원 목록", placeholder: "한 줄에 하나씩 — 예) 1. 집합 8", rows: 5, onChange: (v) => { F.units = v; } });
+    m.querySelector("#brC").onclick = close;
+    ok.onclick = async () => {
+      msg.textContent = ""; ok.disabled = true; ok.textContent = "등록 중…";
+      try {
+        const units = (typeof unitParse === "function" ? unitParse(F.units, F.pages) : []).map((u) => ({ name: u.name, page: u.from == null ? 0 : u.from }));
+        const body = { action: "register-custom", title: F.title.trim(), units };
+        if (F.isbn.trim()) body.isbn13 = F.isbn.trim();
+        if (F.price) body.price = +F.price;
+        if (F.pages) body.pages = +F.pages;
+        if (F.series) body.series = F.series;
+        if (F.publisher) body.publisher = F.publisher;
+        await liveBookApi(body);
+        close();
+        if (dirtyCount() === 0 && typeof window.liveReload === "function") { await window.liveReload(); toast("교재를 등록했어요 — 과목 · 구분은 줄을 눌러 넣어요"); }
+        else toast("교재를 등록했어요 — 저장하지 않은 변경이 있어서 목록은 저장하고 새로고침하면 보여요");
+      } catch (e) {
+        ok.textContent = "교재 등록"; upd();
+        msg.className = "hint warn";
+        msg.textContent = e.status === 409 ? "이미 라이브러리에 있는 교재예요(ISBN이 같아요)" : e.status === 401 || e.status === 403 ? "관리자 로그인이 필요해요 — 새로고침해서 다시 로그인해요" : e.message || "등록하지 못했어요";
+      }
+    };
+    setTimeout(() => { const i = m.querySelector("#brT input"); if (i) i.focus(); }, 0);
+  });
+}
+/* 창 [저장](대표 261119): 그 창의 줄만 서버에 저장한다(학생 창은 그 학생의 작성 중 등록까지). 삭제 예정 줄은 save op:"delete"로 — 성공한 줄만 화면에서 빠진다.
+   저장 전 새 줄을 삭제한 경우는 노션에 없으므로 화면에서만 지운다. 서버 반영이 끝난 뒤 위 숫자와 창이 함께 맞춰진다(liveSaveRun) */
+function liveSaveRow(L, r) {
+  if (!r) return null;
+  if (L.coll === "enrolls" && !r.del && (!r.studentId || !r.classId)) { toast("학생과 클래스를 골라야 등록을 저장할 수 있어요"); return null; }
+  if (r.del && typeof appsIsId === "function" && !appsIsId(r.id)) {
+    const a = DB[L.coll] || [], i = a.indexOf(r);
+    if (i > -1) a.splice(i, 1);
+    try { if (activeTab.state.sel === r.id) { activeTab.state.sel = null; } commit(); } catch (_) {}
+    toast("삭제했어요 — 저장 전에 만든 줄이라 노션에는 없었어요");
+    return null;
+  }
+  const only = (coll, row) => row === r || (L.coll === "students" && coll === "enrolls" && row.studentId === r.id);
+  return liveSave({ only }).then((res) => { try { if (res && res.deleted && activeTab.state.sel === r.id && !(DB[L.coll] || []).includes(r)) { activeTab.state.sel = null; render(); } } catch (_) {} return res; });
+}
+/* ═════ [동기화](노션 → 서버 사본, 261119) — 서버 app-api { action:"run", name:"sync-copy", dbs, full:true }(노션에서 지운 줄까지 통째로 대조, 느려도 됨).
+   현재 화면이 보여 주는 DB(3개 이하)만. 끝나면 목록을 다시 읽어 화면을 맞추고 "마지막 동기화 HH:MM"(서버 syncedAt)을 보인다.
+   저장 안 한 변경이 있으면 막는다(동기화가 덮어쓰지 않게). 503 busy는 appPostJson이 한 번 다시 시도, 504 등은 사람 말로 ═════ */
+const LIVE_SYNC_DBS = {
+  students: ["학생(학원) DB", "등록(학원) DB"], enrolls: ["등록(학원) DB", "학생(학원) DB", "클래스(학원) DB"], classes: ["클래스(학원) DB", "강사(학원) DB", "시간표(학원) DB"],
+  teachers: ["강사(학원) DB"], schools: ["학교(학원) DB", "학년(학원) DB"], subjects: ["과목(학원) DB", "영역(학원) DB"], books: ["라이브러리(학원) DB"],
+  progress: ["진도관리(학원) DB", "라이브러리(학원) DB", "클래스(학원) DB"], timetable: ["시간표(학원) DB", "클래스(학원) DB", "등록(학원) DB"], events: ["일정(학원) DB", "시즌(학원) DB"],
+  exams: ["시험정보(학원) DB", "시험(학원) DB", "성적(학원) DB"], tuition: ["수강료(학원) DB", "결제(학원) DB"], bill: ["청구서(학원) DB", "청구 항목(학원) DB", "청구 결제(학원) DB"],
+  profit: ["결제(학원) DB", "기타경비(학원) DB"], reports: ["보고서(학원) DB", "알림톡 발송함(학원) DB"], completion: ["보고서(학원) DB", "알림톡 발송함(학원) DB"],
+  letters: ["가정통신문(학원) DB", "알림톡 발송함(학원) DB"], files: ["자료(학원) DB"], alims: ["알림톡 설정(학원) DB", "알림톡 발송함(학원) DB"],
+};
+function liveSyncDbs() { const s = window.liveScr ? window.liveScr(activeTab) : (activeTab && activeTab.screen) || ""; return LIVE_SYNC_DBS[s] || ["시간표(학원) DB", "등록(학원) DB"]; }
+function liveSyncTime(iso) { try { return new Date(iso).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Seoul" }); } catch (_) { return ""; } }
+function liveSyncMount() {
+  const sa = document.getElementById("saveAll");
+  const on = !!(window.LIVE && window.LIVE.loaded);
+  let b = document.getElementById("syncBtn"), t = document.getElementById("syncAt");
+  if (!sa || !on) { if (b) b.remove(); if (t) t.remove(); return; }
+  if (b && b.parentElement !== sa.parentElement) { b.remove(); if (t) t.remove(); b = t = null; }
+  if (!b) {
+    sa.insertAdjacentHTML("beforebegin", `<span class="sync-at" id="syncAt"></span><button type="button" class="btn tb-sync ${window._liveSyncing ? "busy" : ""}" id="syncBtn" ${window._liveSyncing ? "disabled" : ""} title="동기화 — 노션에서 바뀐 것 · 지운 줄까지 이 화면의 자료를 통째로 맞춰요(오래 걸릴 수 있어요). 저장과는 달라요: 노션 → 앱 방향이에요">${IC("rotc", "s")}<span>${window._liveSyncing ? "맞추는 중…" : "동기화"}</span></button>`);
+    b = document.getElementById("syncBtn"); t = document.getElementById("syncAt"); b.onclick = liveSyncRun;
+  }
+  if (t) t.textContent = window.LIVE_SYNCED_AT ? `마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)}` : "";
+}
+async function liveSyncStatus() {
+  try { const res = await liveApi(window.LIVE, { action: "status" }); if (res && res.syncedAt) { window.LIVE_SYNCED_AT = res.syncedAt; liveSyncMount(); } } catch (_) {}
+}
+async function liveSyncRun() {
+  if (!(window.LIVE && window.LIVE.loaded)) { toast("노션 자료를 받은 뒤에 동기화해요"); return; }
+  if (window._liveSyncing || window._liveSaving) return;
+  let dirty = 0; try { dirty = dirtyCount(); } catch (_) {}
+  if (dirty > 0) { toast(`저장하지 않은 변경이 ${dirty}개 있어요 — 먼저 위 [저장]을 눌러요(동기화가 덮어쓰지 않게)`); return; }
+  const dbs = liveSyncDbs();
+  window._liveSyncing = true; liveSyncMount(); try { render(); } catch (_) {}
+  toast("노션과 맞추는 중이에요 — 노션에서 지운 줄까지 대조해서 오래 걸릴 수 있어요");
+  const c = window.LIVE;
+  try {
+    const { res, body } = await appPostJson(String(c.url).replace(/\/+$/, "") + "/functions/v1/app-api", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-key": c.session, Authorization: "Bearer " + c.anonKey, apikey: c.anonKey },
+      body: JSON.stringify({ action: "run", name: "sync-copy", dbs, full: true }),
+    });
+    if (res.status === 504 || res.status === 502) throw new Error("시간이 오래 걸려 연결이 끊겼어요 — 서버가 계속 맞추고 있을 수 있어요. 잠시 뒤 다시 눌러요");
+    if (res.status === 503 || (body && body.busy)) throw new Error("노션이 바빠요 — 잠시 뒤 다시 눌러요");
+    if (!res.ok || !body || !body.ok) throw new Error((body && body.error) || "동기화하지 못했어요 (" + res.status + ")");
+    if (body.syncedAt) window.LIVE_SYNCED_AT = body.syncedAt;
+    window._liveSyncing = false;
+    if (typeof window.liveReload === "function") await window.liveReload(); /* 사본을 다시 읽어 화면을 서버 값으로 맞춘다 */
+    const probs = Object.entries(body.problems || {}).map(([db, why]) => `${String(db).replace(/\(학원\) DB$/, "")}: ${why}`);
+    const nf = (body.notFilled || []).length;
+    toast(`동기화했어요 · 바뀐 ${body.changed || 0}줄${body.deleted ? ` · 노션에서 지운 ${body.deleted}줄` : ""}${nf ? ` — 아직 처음 채우는 중인 항목이 있어요(${(body.notFilled || []).map((x) => String(x).replace(/\(학원\) DB$/, "")).join(", ")})` : ""}${probs.length ? ` — 맞추지 못한 것: ${probs.join(" · ")}` : ""}`);
+  } catch (e) { toast("동기화하지 못했어요 — " + e.message); }
+  finally { window._liveSyncing = false; try { liveSyncMount(); const b = document.getElementById("syncBtn"); if (b) { b.classList.remove("busy"); b.disabled = false; const s = b.querySelector("span"); if (s) s.textContent = "동기화"; } } catch (_) {} }
 }
 /* 실제 자료 모드의 [수업 생성]: 시간표마다 다음 수업 한 번을 노션 수업 생성 큐에 맡긴다(app-api run — 시간표 [수업 추가]와 같은 처리).
    저장 전인 새 시간표는 노션에 아직 없으므로 먼저 저장하라고 알린다. 수업 · 출석은 1-2분 뒤 노션에 생긴다(앱 화면에는 그리지 않음). */
@@ -338,7 +484,8 @@ async function liveRunClasses(blockIds) {
     return body;
   } catch (e) { toast("수업 생성을 맡기지 못했어요 — " + e.message); return null; }
 }
-async function liveSave() {
+async function liveSave(opts) { /* opts.only(coll,row) = 이 줄만 저장(창 [저장]) · 없으면 모든 수정(우측 상단 [저장]) */
+  opts = opts || {};
   if (!(window.LIVE && window.LIVE.loaded)) { toast("노션 자료를 다 받기 전에는 저장할 수 없어요"); return null; }
   if (window._liveSaving) return null;
   window._liveSaving = true;
@@ -346,7 +493,7 @@ async function liveSave() {
     if (window.LIVE_OPTS_PENDING && window.LIVE_OPTS_PROMISE) { toast("노션 선택지를 불러온 뒤에 저장해요"); await window.LIVE_OPTS_PROMISE; } /* 선택지에 없는 값을 거르려면 선택지가 먼저 필요(저장 층이 읽음) */
     /* 수업 출결(작성 중인 수업)이 있으면 먼저 수업 관리 서버로 보낸다(출결 쓰기 칸이 켜져 있을 때) */
     let lessons = 0;
-    if ((window.LIVE_ATTW || window.LIVE_RECW) && typeof liveLessonSave === "function") {
+    if (!opts.only && (window.LIVE_ATTW || window.LIVE_RECW) && typeof liveLessonSave === "function") {
       /* 작성 중인 수업 = 수업 창 표시(LDIRTY) + 학습기록 쓰기 칸이면 작성 중 기록이 있는 수업(Z1) — 실제 수업(LIVE_LS)만 */
       const ks = new Set([...LDIRTY.keys()].filter((k) => !k.startsWith("mk:")));
       if (window.LIVE_RECW) (DB.recs || []).forEach((r) => { if (r.state === "draft" && !r.del && r.key && typeof LIVE_LS !== "undefined" && LIVE_LS[r.key]) ks.add(r.key); });
@@ -354,18 +501,19 @@ async function liveSave() {
       for (const k of ks) { if (await liveLessonSave(k)) lessons++; }
     }
     /* 보강(칸 P3m): 만들기 · 배정 · 빼기 · 지우기를 서버 보강 동작으로 */
-    if (window.LIVE_MKW && typeof liveMakeupSave === "function") lessons += await liveMakeupSave();
-    let pend = 0; try { pend = appSaveCollect(DB).changes.length; } catch (_) {}
+    if (!opts.only && window.LIVE_MKW && typeof liveMakeupSave === "function") lessons += await liveMakeupSave();
+    let pend = 0; try { pend = appSaveCollect(DB, opts.only).changes.length; } catch (_) {}
     if (lessons && !pend) return { ok: 0, failed: [], lessons };
-    return await liveSaveRun();
+    return await liveSaveRun(opts);
   } finally { window._liveSaving = false; }
 }
-async function liveSaveRun() {
+async function liveSaveRun(opts) {
   const say = (m) => toast(m);
   const esc2 = (s) => (typeof esc === "function" ? esc(s) : String(s));
   say("노션에 저장하는 중이에요");
   let res;
-  try { res = await appSaveSend(window.LIVE, DB); }
+  /* 서버는 줄을 하나씩 순서대로 노션에 쓴다 — 느려도 되고, 앱은 몇 줄째인지 보여 준다 */
+  try { res = await appSaveSend(window.LIVE, DB, { only: opts && opts.only, onProgress: (n, m) => { if (m > 10) say(`노션에 저장하는 중이에요 · ${n}/${m}줄`); } }); }
   catch (e) { say("저장하지 못했어요 — " + e.message); return null; }
   /* 새 줄은 노션 id로 바뀐다: 열려 있는 탭이 가리키던 옛 id도 바꾼다 */
   if (window.liveRoReset) window.liveRoReset(); /* 보기 화면에서 저장했을 때 저장 결과(새 id · 저장됨)를 되돌리지 않게 */
@@ -379,9 +527,14 @@ async function liveSaveRun() {
   try { undoStack.length = 0; if (typeof redoStack !== "undefined") redoStack.length = 0; lastSnap = snapshot(); } catch (_) {}
   try { if (window.liveSelBack) window.liveSelBack(); } catch (_) {}
   render(); try { savedSync(); } catch (_) {} try { if (window.liveStuMark) window.liveStuMark(); } catch (_) {} /* 저장된 학생의 되돌리기 기준을 새로 적는다 */
-  const dels = (res.dels || []).length, warn = (res.warn || []).length;
-  if (!res.failed.length && !dels && !warn) { say(`노션에 저장했어요 · ${res.ok}줄`); return res; }
+  const warn = (res.warn || []).length;
+  /* 저장 버튼 규칙(대표 261119): 서버 반영이 끝난 뒤 숫자를 줄이고, 실패한 줄은 이유와 함께 숫자에 남긴다. 바뀐 것이 없으면 "저장할 변경이 없어요" */
+  let left = 0; try { left = dirtyCount(); } catch (_) {}
+  if (!res.failed.length && !warn) {
+    if (!res.ok && !res.sent) { say("저장할 변경이 없어요"); return res; }
+    say(`저장했어요 · ${res.ok}줄${res.deleted ? ` (삭제 ${res.deleted}줄 포함)` : ""}${opts && opts.only && left ? ` · 저장할 것 ${left}개 남음(위 [저장])` : ""}`); return res;
+  }
   const li = (a) => a.map((f) => `<li><b>${esc2(f.name || f.coll || "")}</b> — ${esc2(f.conflict ? "그사이 노션에서 바뀌었어요. 새로 고친 뒤 다시 저장해요" : f.error || f.msg || f)}</li>`).join("");
-  modal(`<h2>저장 결과</h2><div class="box"><p>노션에 저장 ${res.ok}줄${res.failed.length ? ` · 저장 안 됨 ${res.failed.length}줄(작성 중으로 남겼어요)` : ""}</p>${res.failed.length ? `<ul>${li(res.failed)}</ul>` : ""}${warn ? `<p class="hint">확인할 것 ${warn}건</p><ul>${li((res.warn || []).map((w) => (typeof w === "string" ? { error: w } : w)))}</ul>` : ""}${dels ? `<p class="hint">삭제 예정 ${dels}줄은 보내지 않았어요 — 노션에서 직접 지워요.</p>` : ""}</div><div class="actions"><span class="sp"></span><button class="btn pri" id="co">확인</button></div>`, (m, close) => { m.querySelector("#co").onclick = close; });
+  modal(`<h2>저장 결과</h2><div class="box"><p>노션에 저장 ${res.ok}줄${res.failed.length ? ` · 저장 안 됨 ${res.failed.length}줄(작성 중으로 남겼어요)` : ""}</p>${res.failed.length ? `<ul>${li(res.failed)}</ul>` : ""}${warn ? `<p class="hint">확인할 것 ${warn}건</p><ul>${li((res.warn || []).map((w) => (typeof w === "string" ? { error: w } : w)))}</ul>` : ""}</div><div class="actions"><span class="sp"></span><button class="btn pri" id="co">확인</button></div>`, (m, close) => { m.querySelector("#co").onclick = close; });
   return res;
 }
