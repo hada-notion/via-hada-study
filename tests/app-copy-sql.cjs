@@ -1,7 +1,10 @@
 // 관리 앱 읽기 복사본 마이그레이션(v2.8.0 항목 74) 검사. PGlite에 pg_cron·pg_net·Vault 대신 기록만 하는 가짜를 두고
 // 표 · 잠금(RLS) · 건수 함수 · 예약 3개와 부르는 본문을 확인한다. 실제 DB·네트워크·비밀값 없음.
 const {PGlite}=require(process.env.PGLITE_MODULE||'@electric-sql/pglite');
-const assert=require('node:assert/strict'),fs=require('fs');
+const assert=require('node:assert/strict'),fs=require('fs'),vm=require('node:vm');
+const configContext={window:{}};
+vm.runInNewContext(fs.readFileSync('hada_config.js','utf8'),configContext);
+const expectedCronUrl=configContext.window.HADA_CONFIG.supabaseUrl+'/functions/v1/sync-class-room-copy';
 (async()=>{
 const db=new PGlite();
 await db.exec(`create role anon; create role authenticated;
@@ -21,7 +24,7 @@ const jobs=(await db.query("select jobname,schedule from cron.job where jobname 
 assert.deepEqual(jobs,['app-copy-first-fill */3 * * * *','app-copy-incremental */5 * * * *','app-copy-reconcile */3 18-19 * * *']);
 const run=async n=>{const c=(await db.query('select command from cron.job where jobname=$1',[n])).rows[0].command;await db.query(c);return (await db.query('select url,headers,body from net.calls order by id desc limit 1')).rows[0];};
 for(const [n,step] of [['app-copy-first-fill','fill'],['app-copy-incremental','incremental'],['app-copy-reconcile','reconcile-next']]){
- const c=await run(n);assert.equal(c.url,'https://twczhsxybkcvjkdfdxvs.supabase.co/functions/v1/sync-class-room-copy');
+ const c=await run(n);assert.equal(c.url,expectedCronUrl);
  assert.deepEqual(c.body,{mode:'app',step});assert.equal(c.headers['x-admin-key'],'test-only-key');
 }
 await db.query(`insert into public.app_rows(id,db,props,notion_edited_at) values('a','학생(학원) DB','{"이름":"하다"}',now()),('b','학생(학원) DB','{}',now()),('c','클래스(학원) DB','{}',now())`);
