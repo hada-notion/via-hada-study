@@ -1,19 +1,21 @@
-// 웹훅 길잡이 시험: 연결표가 관리자 설정 체크리스트와 같은지, 동작 ID를 제대로 뽑는지, 기존 함수로 그대로 넘기는지.
+// 웹훅 길잡이 시험: 연결표 모양, 동작 ID를 제대로 뽑는지, 기존 함수로 그대로 넘기는지.
 import { WEBHOOK_ROUTES, resolveActions, routeById, targetUrl } from "./webhookRoutes.ts"
 import { handleRouter, processRouterRetryItem, ROUTER_MISS_TARGET, ROUTER_RETRY_TARGET, type RouterDeps } from "./webhookRouter.ts"
 
 function assert(cond: unknown, msg = "assertion failed"): asserts cond { if (!cond) throw new Error(msg) }
 const eq = (a: unknown, b: unknown, msg?: string) => assert(JSON.stringify(a) === JSON.stringify(b), `${msg ?? ""} ${JSON.stringify(a)} !== ${JSON.stringify(b)}`)
 
-Deno.test("연결표 = 관리자 설정 웹훅 체크리스트(ID·함수·경로·순서)", async () => {
-  const js = await Deno.readTextFile(new URL("../../../admin_settings.js", import.meta.url))
-  const block = js.slice(js.indexOf("const CHECKLIST=["), js.indexOf("function route("))
-  const items = [...block.matchAll(/\['([a-z0-9-]+)','[^']*',(BUTTON|AUTO),route\('([a-z-]+)'\)(,(\{[^\n]*?)\])?/g)].map((m) => {
-    const path = /path:'([^']*)'/.exec(m[5] ?? "")
-    return [m[1], m[3], path ? path[1] : ""]
-  })
-  eq(WEBHOOK_ROUTES.map((r) => [r.id, r.fn, r.path]), items, "routes")
+// 261123: 옛 관리자 설정 웹 화면(체크리스트 원본)을 없앰 — 연결표가 원본. ID 고유 · 형식, 함수 · DB 라벨 · 종류가 빈 칸 없음, 경로는 비거나 ? · /로 시작.
+Deno.test("연결표: ID 고유 · 형식, 함수 · DB · 종류 · 경로", () => {
+  assert(WEBHOOK_ROUTES.length >= 30, "rows")
   assert(new Set(WEBHOOK_ROUTES.map((r) => r.id)).size === WEBHOOK_ROUTES.length, "ids unique")
+  for (const r of WEBHOOK_ROUTES) {
+    assert(/^[a-z0-9-]{1,64}$/.test(r.id), "id " + r.id)
+    assert(/^[a-z-]+$/.test(r.fn), "fn " + r.id)
+    assert(/\(학원\)$/.test(r.db), "db " + r.id)
+    assert(r.kind === "button" || r.kind === "automation", "kind " + r.id)
+    assert(r.path === "" || /^[?/]/.test(r.path), "path " + r.id)
+  }
 })
 
 Deno.test("동작 ID: 헤더·수식(wait 배열·문자열)·중복·모르는 ID", () => {
@@ -170,34 +172,53 @@ Deno.test("워커 다시 넘기기: 지금 서버 키로 본문 그대로, 실�
   assert(threw, "unknown id throws")
 })
 
-Deno.test("GET은 405", async () => {
-  eq((await handleRouter(new Request("https://x/functions/v1/notion-router"), deps())).status, 405)
+// (261123 출시 전 3번) 요청 칸에서 온 다시 넘기기가 성공하면 "⚠️ 실패"로 남은 요청 칸을 ✅ 완료(자동 재시도)로.
+Deno.test("출시 전 3번: 자동 재시도 성공 → 요청 칸 ✅ 완료(자동 재시도), 사람이 다시 눌렀으면 그대로", async () => {
+  const sel = (name: string) => ({ type: "select", select: { name } })
+  const mk = (st: number, reqNow: string, body = '{"ok":true}') => {
+    const patches: any[] = []
+    return {
+      patches,
+      deps: {
+        fetch: (async () => new Response(body, { status: st })) as any,
+        baseUrl: () => "https://x.supabase.co",
+        key: async () => "server-key",
+        request: {
+          readPage: async (id: string) => ({ id, properties: { "요청": sel(reqNow) } }),
+          patch: async (id: string, props: any) => { patches.push({ id, props }) },
+          now: () => Date.UTC(2026, 10, 23, 1, 0, 0),
+          log: () => {},
+        },
+      },
+    }
+  }
+  const evBody = JSON.stringify({ source: { type: "notion-events", request: "session-record" }, data: { id: "p" } })
+  const a = mk(202, "⚠️ 실패")
+  await processRouterRetryItem({ id: "session-record", pageId: "p", body: evBody }, undefined, a.deps)
+  eq(a.patches.length, 1)
+  eq(a.patches[0].props["요청"].select.name, "✅ 완료")
+  assert(a.patches[0].props["요청 결과"].rich_text[0].text.content.startsWith("✅ 완료(자동 재시도) · 학습기록 생성"), a.patches[0].props["요청 결과"].rich_text[0].text.content)
+  // 그사이 다시 눌렀으면(처리 중 · 새 요청) 건드리지 않는다
+  for (const now of ["🔄 처리 중", "session-record", "✅ 완료"]) {
+    const b = mk(202, now)
+    await processRouterRetryItem({ id: "session-record", pageId: "p", body: evBody }, undefined, b.deps)
+    eq(b.patches.length, 0, now)
+  }
+  // 옛 길잡이(자동화 웹훅)에서 온 다시 넘기기는 요청 칸이 없으니 쓰지 않는다
+  const c = mk(202, "⚠️ 실패")
+  await processRouterRetryItem({ id: "session-record", pageId: "p", body: '{"data":{"id":"p"}}' }, undefined, c.deps)
+  eq(c.patches.length, 0)
+  // 함수가 4xx로 거절하면 요청 칸은 실패 그대로, 이유만 바꿔 쓴다(더는 자동으로 안 넘김)
+  const d = mk(400, "⚠️ 실패", '{"error":"보고서 구분이 비어 있습니다"}')
+  await processRouterRetryItem({ id: "session-record", pageId: "p", body: evBody }, undefined, d.deps)
+  eq(d.patches[0].props["요청"], undefined)
+  assert(d.patches[0].props["요청 결과"].rich_text[0].text.content.includes("보고서 구분이 비어 있습니다"))
+  // 결과 쓰기가 실패해도 throw하지 않는다(던지면 큐가 같은 동작을 한 번 더 넘김)
+  const e = mk(202, "⚠️ 실패")
+  e.deps.request.patch = async () => { throw new Error("504") }
+  await processRouterRetryItem({ id: "session-record", pageId: "p", body: evBody }, undefined, e.deps)
 })
 
-// (v2.8.0 항목 80) 체크리스트 괄호가 어긋나 항목이 DB 묶음 밖으로 떨어지면(예: class-etc-charge) ID 대조는 통과해도 화면 카드가 깨진다.
-// 모든 항목이 [DB 이름, [항목…]] 안(깊이 3)에 있고, 그 DB 이름이 연결표 db 라벨과 같은지 본다.
-Deno.test("체크리스트: 모든 항목이 DB 묶음 안, 묶음 이름 = 연결표 db", async () => {
-  const js = await Deno.readTextFile(new URL("../../../admin_settings.js", import.meta.url))
-  const start = js.indexOf("const CHECKLIST=[") + "const CHECKLIST=".length
-  const end = js.indexOf("function route(")
-  let depth = 0, group = ""
-  const seen: [string, string][] = []
-  for (let i = start; i < end; i++) {
-    const ch = js[i]
-    if (ch === "'") {
-      let j = i + 1
-      while (j < end && js[j] !== "'") j += js[j] === "\\" ? 2 : 1
-      const text = js.slice(i + 1, j)
-      if (depth === 2 && js[i - 1] === "[") group = text
-      if (depth === 4 && js[i - 1] === "[" && /^[a-z0-9-]+$/.test(text) && /^,'[^']*',(BUTTON|AUTO),/.test(js.slice(j + 1, j + 40))) seen.push([text, group])
-      if (depth !== 4 && js[i - 1] === "[" && /^[a-z0-9-]+$/.test(text) && /^,'[^']*',(BUTTON|AUTO),/.test(js.slice(j + 1, j + 40))) throw new Error(`항목 ${text}가 DB 묶음 밖(깊이 ${depth})`)
-      i = j
-      continue
-    }
-    if (ch === "[") depth++
-    else if (ch === "]") depth--
-    if (depth === 0) break
-  }
-  eq(seen.map(([id]) => id), WEBHOOK_ROUTES.map((r) => r.id), "items")
-  eq(seen.map(([, g]) => g), WEBHOOK_ROUTES.map((r) => r.db), "db labels")
+Deno.test("GET은 405", async () => {
+  eq((await handleRouter(new Request("https://x/functions/v1/notion-router"), deps())).status, 405)
 })

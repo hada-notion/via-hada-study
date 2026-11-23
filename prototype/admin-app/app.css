@@ -1789,8 +1789,24 @@ table.stt tr[data-id]:not(.sdel):hover td.op{background:var(--brand-tint,#FBF8F4
 #view .tb-sync{height:32px;padding:0 var(--space-2);gap:var(--space-1);border-radius:10px;display:inline-flex;align-items:center;font-size:var(--text-caption);font-weight:600}#view .tb-sync svg.i{width:15px;height:15px;flex:none}
 #view .tb-sync.busy svg{animation:hadaspin 1s linear infinite}@keyframes hadaspin{to{transform:rotate(360deg)}}
 /* 위 줄 맞춤(fitBars)은 줄 안 칸의 top이 8px 넘게 다르면 "넘침"으로 보고 탭을 드롭다운으로 접는다 — 높이를 다른 단추와 같은 32px로 해 위치가 같게 */
-#view .pg-bar.compact .sync-at{display:none}/* 좁으면 시각 글자를 먼저 숨기고(탭을 접기 전에) — 시각은 [동기화] 단추 title에도 있음 */
-#view .sync-at{display:inline-flex;align-items:center;height:32px;font-size:11.5px;color:var(--subtle);white-space:nowrap;margin:0 var(--space-1) 0 var(--space-2)}
+/* 261123 열린 화면 자동 갱신(liverefresh.js): [동기화] 옆 점(초록 = 신호 연결됨, 회색 = 1분마다 확인) · 방금 바뀐 표 줄 잠깐 강조 · 창 위 알림 줄 · 노션 요청 알약 */
+#view .lr-dot{width:8px;height:8px;border-radius:var(--radius-pill);background:var(--control-border);flex:none;margin-left:var(--space-2)}
+#view .lr-dot.on{background:var(--success)}
+#view tr.lr-flash>td{animation:lrflash 4s ease-out}@keyframes lrflash{0%,40%{background:var(--info-soft)}100%{background:transparent}}
+.lr-note{display:flex;align-items:center;gap:var(--space-2);flex-wrap:wrap;margin:0 0 var(--space-2);padding:var(--space-2) var(--space-3);border-radius:var(--radius-sm);font-size:var(--text-label);background:var(--brand-tint);color:var(--text-ink)}
+.lr-note.w,.lr-note.slow,.lr-note.wait{background:var(--warning-soft);color:var(--warning-ink)}
+.lr-note.fail{background:var(--danger-soft);color:var(--danger-ink)}
+.lr-note.run{background:var(--info-soft);color:var(--info-ink)}
+.lr-note.ok{background:var(--success-soft);color:var(--success-ink)}
+.lr-note>span:first-child:not(.pill){flex:1;min-width:0}
+.lr-note .lr-msg{flex:1;min-width:0;overflow-wrap:anywhere}
+.pill.lr-rq{margin-left:var(--space-1);vertical-align:1px;white-space:nowrap;flex:none}
+.lr-note .pill.lr-rq{margin-left:0;background:var(--surface)}
+.pill.lr-rq.wait,.pill.lr-rq.slow{background:var(--warning-soft);color:var(--warning-ink)}
+.pill.lr-rq.run{background:var(--info-soft);color:var(--info-ink)}
+.pill.lr-rq.ok{background:var(--success-soft);color:var(--success-ink)}
+.pill.lr-rq.fail{background:var(--danger-soft);color:var(--danger-ink)}
+.lr-list .crow .cv{display:flex;align-items:center;gap:var(--space-2);min-width:0}
 #view .tb-num svg.i{width:16px;height:16px;flex:none}#view .tb-num .num{font-size:var(--text-caption);font-weight:700;font-variant-numeric:tabular-nums;margin:0;min-width:8px;text-align:center}
 #view .tb-grp{display:inline-flex;align-items:center;height:32px;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden}
 #view .tb-grp .tb-ic{width:31px;min-width:31px;height:30px;border:0;border-radius:0;background:none}
@@ -3478,3 +3494,29 @@ html:root .lj .ljh,html:root .lj dl{font-size:12px}
 .tdsubs{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}.tdsb{height:28px;padding:0 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer}.tdsb small{color:var(--muted);margin-left:2px}.tdsb.on{background:var(--ink,#2B2118);border-color:var(--ink,#2B2118);color:#fff}.tdsb.on small{color:#fff;opacity:.8}
 /* 261120 대표: 요일 수 [‹ 4 ›] = 줌 조절과 같은 껍데기(.zoomgrp), 가운데는 숫자만 */
 .wdgrp .zoomlbl{min-width:32px;font-variant-numeric:tabular-nums;color:var(--text-ink);font-weight:700}
+
+/* 학교 검색 창(실제 자료 모드, liveschool.js) */
+.nsr{flex:0 0 180px}.nsrow{display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-3);border-bottom:1px solid var(--line2);min-height:64px}.nsrow:last-child{border-bottom:0}.nst{display:flex;flex-direction:column;min-width:0;flex:1}.nst b{font-size:var(--text-small)}.nst .hint{white-space:normal}.nsrow .btn{flex:none}
+
+/* 책 찾기 [교보문고] 탭: 즐겨찾기 단추 · 가져온 정보 붙여넣기 */
+.bfgrab{margin:var(--space-3) 0}.bfgrab .row{display:flex;gap:var(--space-2);flex-wrap:wrap}.bfgrab a.btn{text-decoration:none;display:inline-flex;align-items:center;gap:var(--space-1)}
+.bfgd{margin-top:var(--space-2)}.bfgd summary{cursor:pointer}.bfgd ol{margin:var(--space-2) 0 0;padding-left:var(--space-5)}.bfgd li{margin-bottom:var(--space-1)}
+.bfgrab .bfta{margin-top:var(--space-2)}.bfor{margin-top:var(--space-2)}
+/* 261123 재무: 결제 · 손익 그래프(매출 · 지출 · 손익) · 단추 확인 창 줄 */
+.finwrap{display:flex;flex-direction:column;gap:var(--space-4);padding:var(--space-3) 0}
+.finchart{background:var(--surface);border:1px solid var(--line,#E8DFD2);border-radius:var(--radius-md);padding:var(--space-3) var(--space-4)}
+.finchart .fch{display:flex;align-items:baseline;gap:var(--space-2);margin-bottom:var(--space-2)}.finchart .fch small{color:var(--muted,#8A7F72)}
+.finchart svg{display:block;max-height:240px}
+.finchart .fcg{stroke:var(--line,#E8DFD2);stroke-width:1}.finchart .fcz{stroke:var(--muted,#8A7F72);stroke-width:1;stroke-dasharray:4 3}.finchart .fct{fill:var(--muted,#8A7F72);font-size:11px}
+.finchart .fcl{fill:none;stroke-width:3;stroke-linejoin:round;stroke-linecap:round}.finchart .fcd{stroke:var(--surface);stroke-width:2}
+.finsum{max-width:420px}
+.finrow{display:flex;justify-content:space-between;gap:var(--space-3);padding:var(--space-1) 0}.finrow small{color:var(--muted,#8A7F72);font-weight:400}
+.finnote{margin-top:var(--space-2)}
+.finbar{display:flex;align-items:center;gap:var(--space-2);margin:0 0 var(--space-2)}.finbar .hint{color:var(--muted,#8A7F72)}
+.finf{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-1) 0}.finf>span{flex:0 0 96px;color:var(--muted,#8A7F72)}.finf input,.finf select{flex:1;min-width:0}
+#view>.top.pg-ttl .sync-at{display:inline-flex;align-items:center;margin-left:auto;font-size:11.5px;color:var(--subtle);white-space:nowrap}/* 자동 갱신 줄 = 제목 줄 오른쪽 끝(단추 묶음 바로 위) — 모든 화면 공용 */
+.finchart .fcl.t-blue{stroke:var(--info)}.finchart .fcd.t-blue{fill:var(--info)}.finchart .fcl.t-red{stroke:var(--danger)}.finchart .fcd.t-red{fill:var(--danger)}.finchart .fcl.t-green{stroke:var(--success)}.finchart .fcd.t-green{fill:var(--success)}
+.finchips{display:flex;width:fit-content;max-width:100%;margin:0 0 var(--space-2)}
+.finchart .fcleg{margin-left:auto;display:inline-flex;align-items:center;gap:var(--space-3);color:var(--muted,#8A7F72);font-size:12px}.finchart .fcleg i{display:inline-block;vertical-align:middle;width:10px;height:10px;border-radius:50%;margin-right:4px}.finchart .fcleg i.t-blue{background:var(--info)}.finchart .fcleg i.t-red{background:var(--danger)}.finchart .fcleg i.t-green{background:var(--success)}
+.link-chip{display:inline-flex;align-items:center;gap:var(--space-1);padding:2px var(--space-2);border:1px solid var(--brand-border);border-radius:var(--radius-md);background:var(--surface);color:var(--brand-deep);font-size:var(--text-caption);font-weight:600;text-decoration:none;white-space:nowrap;position:relative}/* 카드 안 이동 링크(DESIGN.md 부품 기준표) — 밑줄 없는 작은 버튼 + ↗, 누르는 영역 투명 44 */
+.link-chip:hover{border-color:var(--brand-deep)}.link-chip::before{content:"";position:absolute;left:50%;top:50%;width:max(100%,var(--hit-min,44px));height:max(100%,var(--hit-min,44px));transform:translate(-50%,-50%)}

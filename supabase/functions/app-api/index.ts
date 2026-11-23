@@ -2,13 +2,27 @@
 // (adminSecurity.ts SECURITY_BROWSER_ROUTES). 읽기는 Supabase 복사본(app_rows)만, 쓰기(save)는 Notion에 먼저 쓴다.
 // body:
 //   { action: "list", db: "학생(학원) DB", since?: ISO } — 그 DB 줄 전체(since가 있으면 그 뒤 동기화된 줄만)
+//   { action: "changes", since: ISO|null, dbs: [...] } — (261123 자동 갱신) since 뒤 바뀐 줄 · 지운 줄(_shared/appChanges.ts) + subscription(구독 끊김 감지 한 줄). 노션은 안 부름
 //   { action: "status" } — DB마다 줄 수 · 마지막 동기화(앱 자료 상태)
+//   { action: "admin-status" } — 관리자 설정(261123): 노션 연결(최상위 제목 · 마지막 동기화) + 노션 연동 구독 상태(_shared/notionSubscriptionStatus.ts)
 //   { action: "save", changes: [{ op: "create"|"update", db, id?, tmp?, edited?, props }] } — (항목 75) 입력 범위 DB만 Notion에 먼저 쓰고
 //       복사본에 반영. 줄마다 성공 · 실패 · 충돌을 돌려준다. 지우기는 없다. 로직은 _shared/appSave.ts.
+//   { action: "record-payment", requestId, tuitionId | itemId, date?, method?, memo? } — (재무 서버 261123 · 2바퀴) 노션 [결제] 버튼과 같은
+//       결제 줄 하나(전액): tuitionId = 수강료 [결제] → 결제(학원) 매출 줄, itemId = 청구 항목 [결제] → 청구 결제(학원) 줄. 그 줄을 다시 읽어
+//       결제 관리 / 결제 상태 · 결제금액을 돌려준다. 같은 requestId는 한 번만. 금액(amount)은 받지 않음 — 일부 · 초과 · 지출 줄은 save.
+//       로직은 _shared/appPayment.ts. 실제 결제 · 발송은 없음.
+//   { action: "end-preview", id, endDate? } — (261123 종료 처리) 등록 [종료 처리] 확인 창 숫자: 이 종료일(없으면 등록 종료일 · 오늘)이면
+//       빠질 앞으로 수업의 날짜들. 읽기만. 실제 종료는 등록 `요청` = reg-end-cleanup(save) — 같은 거름(_shared/registrationEnd.ts).
 // 읽기 로직은 _shared/appCopy.ts.
 import { CORS_HEADERS, requireAdminKey } from "../_shared/adminShared.ts"
 import { APP_DBS, isAppDb, listApp, statusApp, warmSources, syncCopy, lastSyncedAt, rootTitle, NotionBusyError } from "../_shared/appCopy.ts"
 import { checkChanges, saveChanges, runGenerateClasses, writeOptions, SaveError } from "../_shared/appSave.ts"
+import { checkPaymentInput, recordPayment } from "../_shared/appPayment.ts"
+import { appChanges, checkChangesInput, ChangesInputError } from "../_shared/appChanges.ts"
+import { subscriptionStatus, healthOf } from "../_shared/notionSubscriptionStatus.ts"
+import { getPage } from "../_shared/notionClient.ts"
+import { previewEnd } from "../_shared/registrationEnd.ts"
+import { END_DEPS } from "../_shared/registrationEndNotion.ts"
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json", "Cache-Control": "no-store" } })
@@ -36,10 +50,31 @@ Deno.serve(async (req: Request) => {
       warmSources() // (항목 99) 앱 첫 로드가 데우기 — 응답은 안 기다림
       return json({ ok: true, db: body.db, at, rows })
     }
+    // 열린 화면 자동 갱신(261123): Realtime 신호 · 60초 따라잡기 때. 사본만 읽는다.
+    if (body?.action === "changes") {
+      const { since, dbs } = checkChangesInput(body)
+      // (261123) 구독 끊김도 함께 — 홈 입력 점검이 경고를 띄운다(표 한 줄 읽기, 실패해도 바뀐 줄은 그대로 돌려줌).
+      const [changes, health] = await Promise.all([appChanges(since, dbs), healthOf().catch(() => null)])
+      return json({ ...changes, subscription: health })
+    }
     if (body?.action === "status") { const dbs = await statusApp(); const [syncedAt, title] = await Promise.all([lastSyncedAt(), rootTitle()]); return json({ ok: true, dbs, syncedAt, rootTitle: title }) }
+    // 관리자 설정 칸(261123): 노션 연결 확인 + 연동 구독 상태. 노션 연결은 최상위 페이지 제목을 실제로 읽어 본다(못 읽으면 null).
+    if (body?.action === "admin-status") {
+      const [title, syncedAt, subscription] = await Promise.all([rootTitle(), lastSyncedAt(), subscriptionStatus().catch(() => null)])
+      return json({ ok: true, notion: { ok: !!title, rootTitle: title }, syncedAt, subscription })
+    }
     if (body?.action === "save") {
       const results = await saveChanges(checkChanges(body.changes))
       return json({ ok: results.every((r) => r.ok), results })
+    }
+    if (body?.action === "record-payment") return json(await recordPayment(checkPaymentInput(body)))
+    if (body?.action === "end-preview") {
+      const id = String(body.id ?? "")
+      if (!/^[0-9a-f-]{32,36}$/i.test(id)) return json({ error: "등록 id가 올바르지 않습니다." }, 400)
+      if (body.endDate != null && !/^\d{4}-\d{2}-\d{2}$/.test(String(body.endDate))) return json({ error: "종료일 형식이 올바르지 않습니다." }, 400)
+      const reg = await getPage(id)
+      if (!reg?.properties?.["종료일"] || !reg?.properties?.["수업"]) return json({ error: "등록 줄이 아닙니다." }, 400)
+      return json({ ok: true, ...(await previewEnd(reg, END_DEPS, body.endDate ?? null)) })
     }
     // (항목 76) 시간표마다 다음 수업 한 번을 기존 수업 생성 큐에 넣는다. timetableIds가 없으면 시간표 전부.
     if (body?.action === "run") {
@@ -54,9 +89,10 @@ Deno.serve(async (req: Request) => {
     }
     // 쓸 수 있는 DB의 고르기 칸 선택지(앱이 Notion에 있는 값만 고르게).
     if (body?.action === "options") return json({ ok: true, dbs: await writeOptions() })
-    return json({ error: 'action은 "list", "status", "save", "run", "options" 중 하나여야 합니다.' }, 400)
+    return json({ error: 'action은 "list", "changes", "status", "admin-status", "save", "record-payment", "end-preview", "run", "options" 중 하나여야 합니다.' }, 400)
   } catch (err) {
     if (err instanceof SaveError) return json({ error: err.message }, err.status)
+    if (err instanceof ChangesInputError) return json({ error: err.message }, 400)
     // (v2.8.0 항목 100) Notion 한도(429)로 DB 찾기가 오래 걸릴 때: 503 + busy — 앱은 안내 띠를 띄우고 retryAfterSec 뒤 한 번 다시 부른다.
     if (err instanceof NotionBusyError) {
       const res = json({ error: "Notion이 바빠요. 잠시 뒤 다시 시도해 주세요.", busy: true, retryAfterSec: err.retryAfterSec }, 503)

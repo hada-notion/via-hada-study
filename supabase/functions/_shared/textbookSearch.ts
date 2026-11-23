@@ -2,10 +2,10 @@
 //
 // 라이브러리(library.html → textbook-api, v2.5.118). 책을 찾고, 고른 책을 Notion 라이브러리(학원) DB에
 // 한 권 만들고 목차에서 고친 단원을 단원목록 DB에 만든다.
-//   - 책 정보(v2.5.120): 국립중앙도서관 ISBN 서지정보(NL_CERT_KEY) + 카카오 책 검색(KAKAO_REST_KEY). _shared/bookSources.ts.
+//   - 책 정보(v2.5.120): 국립중앙도서관 ISBN 서지정보(NL_CERT_KEY, 카카오는 v2.8.0 항목 113에서 뺌). _shared/bookSources.ts.
 //     알라딘 OpenAPI는 2026-10-30 종료로 쓰지 않는다.
 //   - DB 위치: 진도교재 DB의 "라이브러리"(옛 이름 "정규교재") 관계 → 라이브러리 DB, 그 "단원목록" 관계 → 단원목록 DB(새 Notion ID 설정 없음).
-//   - 북커버: 메뉴얼 7-6 규칙대로 ISBN13으로 만든 교보문고 이미지 주소. 화면에서 열리지 않으면 국립중앙도서관·카카오 표지,
+//   - 북커버: 메뉴얼 7-6 규칙대로 ISBN13으로 만든 교보문고 이미지 주소. 화면에서 열리지 않으면 국립중앙도서관 표지,
 //     그것도 없으면 넣지 않는다(화면이 고른 결과를 cover: "kyobo" | "alt" | "none"으로 보낸다).
 //   - 출판사·시리즈: 이미 있는 선택지와 맞을 때만 넣는다(DB 선택지를 새로 만들지 않는다).
 //   - 같은 ISBN13이 라이브러리에 있으면 "등록됨"으로 보여 주고 다시 만들지 않는다.
@@ -78,8 +78,8 @@ async function registeredIsbns(isbns: string[]): Promise<Set<string>> {
 }
 
 // ---------- 동작 ----------
-// 검색: ISBN13(하이픈·띄어쓰기 허용)이면 그 책 한 권, 아니면 교재명으로 국립중앙도서관·카카오를 함께 찾아
-// 하나의 목록으로(같은 ISBN13은 한 번만, 국립중앙도서관 값 우선).
+// 검색: ISBN13(하이픈·띄어쓰기 허용)이면 그 책 한 권, 아니면 교재명으로 국립중앙도서관에서 찾아
+// 하나의 목록으로(같은 ISBN13은 한 번만).
 export const isbnQuery = (q: string) => { const d = q.replace(/[-s]/g, ""); return isIsbn13(d) ? d : null }
 export async function searchBooks(query: unknown) {
 	const q = String(query ?? "").trim()
@@ -93,7 +93,7 @@ export async function searchBooks(query: unknown) {
 async function lookup(isbn13: string): Promise<Book> {
 	if (!isIsbn13(isbn13)) throw new TextbookError(400, "ISBN13 형식이 올바르지 않습니다.")
 	const book = await fromSource(() => lookupIsbn(isbn13))
-	if (!book) throw new TextbookError(404, "국립중앙도서관·카카오에서 이 교재를 찾지 못했습니다.")
+	if (!book) throw new TextbookError(404, "국립중앙도서관에서 이 교재를 찾지 못했습니다.")
 	return book
 }
 
@@ -157,7 +157,7 @@ export async function registerBook(body: any) {
 	const isbn13 = String(body?.isbn13 ?? "")
 	const book = await lookup(isbn13)
 	const name = String(body?.title ?? "").replace(/\s+/g, " ").trim().slice(0, 200) || book.title
-	// cover: "kyobo"(기본) | "alt"(국립중앙도서관·카카오 표지) | "none". 옛 화면의 noCover도 받는다.
+	// cover: "kyobo"(기본) | "alt"(국립중앙도서관 표지) | "none". 옛 화면의 noCover도 받는다.
 	const choice = body?.noCover ? "none" : String(body?.cover ?? "kyobo")
 	const cover = choice === "none" ? "" : choice === "alt" ? book.altCover : coverUrl(isbn13)
 	return await createLibraryBook({ name, isbn13, price: book.price, pages: book.pages, cover, publisher: book.publisher, seriesHint: book.series, units: body?.units, seriesPick: await pickOption(body?.series, "series"), publisherPick: await pickOption(body?.publisher, "publishers") })
@@ -423,47 +423,12 @@ const seriesName = (v: unknown) => {
 }
 // 시리즈 선택지 바꾸기: op add { name } · rename { id, name } · order { order: [id…] } · remove { id }(교재가 0권일 때만).
 // Notion은 선택지 전체 목록을 받으므로 매번 지금 목록을 새로 읽어 고친 뒤 보낸다(기존 선택지는 id로 유지 → 교재의 값도 유지).
-export async function editSeries(body: any) {
-	const { src, options, duplicates } = await seriesSchema()
-	// id가 겹친 선택지는 이번 변경에서 뺀다(그 이름은 Notion 선택지에서 사라진다). 그 이름을 쓰는 교재가 있으면 멈춘다.
-	for (const d of duplicates) {
-		const used = await queryAllPages(src.books, { property: "시리즈", select: { equals: d.name } })
-		if (used.length) throw new TextbookError(409, `Notion 시리즈 선택지 "${d.name}"가 다른 선택지와 같은 id를 쓰고 있습니다. Notion에서 "${d.name}" 선택지를 지우고 다시 만든 뒤 교재 ${used.length}권에 다시 지정해 주세요.`)
-	}
-	const keep = (o: SeriesOption) => ({ id: o.id, name: o.name })
-	const find = (id: unknown) => { const o = options.find((x) => x.id === String(id ?? "")); if (!o) throw new TextbookError(404, "시리즈를 찾지 못했습니다. 새로고침 후 다시 하세요."); return o }
-	const taken = (name: string, except = "") => options.some((o) => o.id !== except && norm(o.name) === norm(name))
-	let next: Record<string, unknown>[], renamed: [string, string] | null = null
-	switch (String(body?.op ?? "")) {
-		case "add": {
-			const name = seriesName(body?.name)
-			if (taken(name)) throw new TextbookError(409, "이미 있는 시리즈입니다.")
-			next = [...options.map(keep), { name, color: "default" }]
-			break
-		}
-		case "rename": {
-			const o = find(body?.id), name = seriesName(body?.name)
-			if (taken(name, o.id)) throw new TextbookError(409, "이미 있는 시리즈 이름입니다.")
-			next = options.map((x) => x.id === o.id ? { id: x.id, name } : keep(x))
-			renamed = [o.name, name]
-			break
-		}
-		case "order": {
-			const order = Array.isArray(body?.order) ? body.order.map(String) : []
-			if (order.length !== options.length || new Set(order).size !== order.length || !order.every((i: string) => options.some((o) => o.id === i)))
-				throw new TextbookError(409, "시리즈 목록이 그사이 바뀌었습니다. 새로고침 후 다시 하세요.")
-			next = order.map((i: string) => keep(options.find((o) => o.id === i)!))
-			break
-		}
-		case "remove": {
-			const o = find(body?.id)
-			const used = await queryAllPages(src.books, { property: "시리즈", select: { equals: o.name } })
-			if (used.length) throw new TextbookError(409, `교재 ${used.length}권이 이 시리즈를 쓰고 있어 지울 수 없습니다.`)
-			next = options.filter((x) => x.id !== o.id).map(keep)
-			break
-		}
-		default: throw new TextbookError(400, "지원하지 않는 시리즈 작업입니다.")
-	}
+// Notion API는 있는 선택지의 이름을 바꾸지 않는다(같은 id에 새 이름을 보내도 200으로 답하고 옛 이름을 그대로 둔다 — v2.8.0 원본 확인).
+// 그래서 rename은 ① 새 이름 선택지를 옛 것 바로 뒤에 추가 → ② 옛 이름 교재를 모두 새 이름으로 → ③ 옛 선택지를 뺀다.
+// 모든 변경은 Notion이 돌려준 목록을 보낸 목록과 맞춰 보고, 다르면 ok가 아니라 이유로 답한다.
+const optKey = (s: string) => s.trim().toLowerCase() // Notion은 대소문자·앞뒤 띄어쓰기를 가리지 않고 선택지 이름을 맞춘다
+type SentOption = { id?: string; name: string; color?: string }
+async function writeSeriesOptions(src: Sources, next: SentOption[], what: string): Promise<SeriesOption[]> {
 	const res = await fetchWithRetry(`${NOTION_API}/data_sources/${src.books}`, {
 		method: "PATCH", headers: notionHeaders(), body: JSON.stringify({ properties: { "시리즈": { select: { options: next } } } }),
 	}, 2)
@@ -472,15 +437,91 @@ export async function editSeries(body: any) {
 		console.error("[textbook-api] 시리즈 변경 거부:", res.status, text.slice(0, 300))
 		let why = ""
 		try { why = String(JSON.parse(text)?.message ?? "").slice(0, 160) } catch { /* 본문 없음 */ }
-		throw new TextbookError(502, `Notion이 시리즈 변경을 받지 않았습니다(${res.status}${why ? ": " + why : ""}). Notion 라이브러리 DB의 "시리즈" 속성에서 직접 고쳐 주세요.`)
+		throw new TextbookError(502, `Notion이 시리즈 변경(${what})을 받지 않았습니다(${res.status}${why ? ": " + why : ""}). Notion 라이브러리 DB의 "시리즈" 속성에서 직접 고쳐 주세요.`)
 	}
-	// Notion이 돌려준 새 선택지(새 id 포함)를 그대로 쓴다 — 목록을 다시 읽지 않는다(v2.5.124). 응답에 없으면 다시 읽는다.
+	// Notion이 돌려준 새 선택지(새 id 포함)를 그대로 쓴다(v2.5.124). 응답에 없으면 다시 읽는다.
 	const saved = (await res.json().catch(() => null))?.properties?.["시리즈"]?.select?.options
 	const seen = new Set<string>()
-	const series = Array.isArray(saved)
-		? saved.map((o: any) => ({ id: String(o.id), name: String(o.name) })).filter((o: SeriesOption) => !seen.has(o.id) && !!seen.add(o.id))
-		: (await seriesList()).series
-	if (sourcesCache) sourcesCache = { ...sourcesCache, series: series.map((o: SeriesOption) => o.name) }
-	if (renamed) await renameSeriesCopy(...renamed)
-	return { ok: true, cleaned: duplicates.map((o) => o.name), series, duplicates: [] as string[] }
+	const got: SeriesOption[] = Array.isArray(saved)
+		? saved.map((o: any) => ({ id: String(o.id), name: String(o.name), color: o.color })).filter((o: SeriesOption) => !seen.has(o.id) && !!seen.add(o.id))
+		: (await seriesSchema()).options
+	const want = next.map((o) => o.name), have = got.map((o) => o.name)
+	if (want.length !== have.length || want.some((n, k) => optKey(n) !== optKey(have[k]))) {
+		console.error("[textbook-api] 시리즈 변경 무시:", JSON.stringify({ want, have }).slice(0, 300))
+		throw new TextbookError(502, `Notion이 답은 했지만 시리즈 변경(${what})이 반영되지 않았습니다. 새로고침 후 다시 하거나 Notion 라이브러리 DB의 "시리즈" 속성에서 직접 고쳐 주세요.`)
+	}
+	return got
+}
+async function setSeriesOf(pages: any[], name: string | null): Promise<number> {
+	let done = 0
+	for (const p of pages) { await updatePageProperties(p.id, { "시리즈": { select: name ? { name } : null } }); done++ }
+	return done
+}
+async function renameSeries(src: Sources, options: SeriesOption[], o: SeriesOption, name: string): Promise<SeriesOption[]> {
+	const keep = (x: SeriesOption): SentOption => ({ id: x.id, name: x.name })
+	// ① 새 선택지(옛 것과 같은 색)를 옛 것 바로 뒤에
+	const added = await writeSeriesOptions(src, options.flatMap((x) => x.id === o.id ? [keep(x), { name, color: x.color ?? "default" }] : [keep(x)]), "새 이름 추가")
+	const fresh = added.find((x) => x.name === name && x.id !== o.id)
+	if (!fresh) throw new TextbookError(502, "Notion에 새 시리즈 이름이 만들어지지 않았습니다. 새로고침 후 다시 하세요.")
+	// ② 교재 옮기기. 중간에 실패하면 옮긴 교재를 옛 이름으로 되돌리고 새 선택지를 뺀다.
+	const books = await queryAllPages(src.books, { property: "시리즈", select: { equals: o.name } })
+	let moved = 0
+	try {
+		for (const p of books) { await updatePageProperties(p.id, { "시리즈": { select: { name } } }); moved++ }
+	} catch (err) {
+		console.error("[textbook-api] 시리즈 교재 옮기기 실패:", moved, "/", books.length, String(err).slice(0, 200))
+		let undone = true
+		try { await setSeriesOf(books.slice(0, moved), o.name); await writeSeriesOptions(src, added.filter((x) => x.id !== fresh.id).map(keep), "되돌리기") } catch { undone = false }
+		throw new TextbookError(502, `교재 ${books.length}권 중 ${moved}권만 새 이름으로 옮기고 멈췄습니다. ${undone ? "옮긴 교재를 옛 이름으로 되돌렸습니다" : `되돌리지 못했습니다 — Notion 라이브러리에서 시리즈 "${name}" 교재를 "${o.name}"으로 고쳐 주세요`}. 잠시 뒤 다시 하세요.`)
+	}
+	// ③ 옛 선택지 빼기(그사이 옛 이름을 쓴 교재가 생겼으면 그것도 옮긴 뒤)
+	const late = await queryAllPages(src.books, { property: "시리즈", select: { equals: o.name } })
+	if (late.length) await setSeriesOf(late, name)
+	await renameSeriesCopy(o.name, name)
+	return await writeSeriesOptions(src, added.filter((x) => x.id !== o.id).map(keep), "옛 이름 빼기")
+}
+export async function editSeries(body: any) {
+	const { src, options, duplicates } = await seriesSchema()
+	// id가 겹친 선택지는 이번 변경에서 뺀다(그 이름은 Notion 선택지에서 사라진다). 그 이름을 쓰는 교재가 있으면 멈춘다.
+	for (const d of duplicates) {
+		const used = await queryAllPages(src.books, { property: "시리즈", select: { equals: d.name } })
+		if (used.length) throw new TextbookError(409, `Notion 시리즈 선택지 "${d.name}"가 다른 선택지와 같은 id를 쓰고 있습니다. Notion에서 "${d.name}" 선택지를 지우고 다시 만든 뒤 교재 ${used.length}권에 다시 지정해 주세요.`)
+	}
+	const keep = (o: SeriesOption): SentOption => ({ id: o.id, name: o.name })
+	const find = (id: unknown) => { const o = options.find((x) => x.id === String(id ?? "")); if (!o) throw new TextbookError(404, "시리즈를 찾지 못했습니다. 새로고침 후 다시 하세요."); return o }
+	const taken = (name: string, except = "") => options.some((o) => o.id !== except && norm(o.name) === norm(name))
+	let series: SeriesOption[]
+	switch (String(body?.op ?? "")) {
+		case "add": {
+			const name = seriesName(body?.name)
+			if (taken(name)) throw new TextbookError(409, "이미 있는 시리즈입니다.")
+			series = await writeSeriesOptions(src, [...options.map(keep), { name, color: "default" }], "추가")
+			break
+		}
+		case "rename": {
+			const o = find(body?.id), name = seriesName(body?.name)
+			if (name === o.name) throw new TextbookError(400, "지금과 같은 이름입니다.")
+			if (optKey(name) === optKey(o.name)) throw new TextbookError(400, "대소문자만 다른 이름은 Notion이 같은 이름으로 봐서 여기서 바꿀 수 없습니다. Notion 라이브러리 DB의 \"시리즈\" 속성에서 직접 고쳐 주세요.")
+			if (taken(name, o.id)) throw new TextbookError(409, "이미 있는 시리즈 이름입니다.")
+			series = await renameSeries(src, options, o, name)
+			break
+		}
+		case "order": {
+			const order = Array.isArray(body?.order) ? body.order.map(String) : []
+			if (order.length !== options.length || new Set(order).size !== order.length || !order.every((i: string) => options.some((o) => o.id === i)))
+				throw new TextbookError(409, "시리즈 목록이 그사이 바뀌었습니다. 새로고침 후 다시 하세요.")
+			series = await writeSeriesOptions(src, order.map((i: string) => keep(options.find((o) => o.id === i)!)), "순서")
+			break
+		}
+		case "remove": {
+			const o = find(body?.id)
+			const used = await queryAllPages(src.books, { property: "시리즈", select: { equals: o.name } })
+			if (used.length) throw new TextbookError(409, `교재 ${used.length}권이 이 시리즈를 쓰고 있어 지울 수 없습니다.`)
+			series = await writeSeriesOptions(src, options.filter((x) => x.id !== o.id).map(keep), "삭제")
+			break
+		}
+		default: throw new TextbookError(400, "지원하지 않는 시리즈 작업입니다.")
+	}
+	if (sourcesCache) sourcesCache = { ...sourcesCache, series: series.map((o) => o.name) }
+	return { ok: true, cleaned: duplicates.map((o) => o.name), series: series.map((o) => ({ id: o.id, name: o.name })), duplicates: [] as string[] }
 }
