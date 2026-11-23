@@ -1,9 +1,12 @@
 import { SecurityError, authorizeKey, hashPassword, verifyPassword, validatePassword, sha256, equalSecret, nextRecommended, randomToken, INITIAL_PASSWORD, SECURITY_WEBHOOK_ROUTES } from './adminSecurity.ts';
+import { WEBHOOK_ROUTES } from './webhookRoutes.ts';
 function assert(v:unknown,m='assertion failed'){if(!v)throw new Error(m);}
 function rejects(fn:()=>unknown){try{fn();}catch(e){assert(e instanceof SecurityError);return;}throw new Error('expected rejection');}
 Deno.env.set('SB_URL','https://mock.supabase.co');Deno.env.set('SB_SERVICE_ROLE_KEY','test-only-service');Deno.env.set('ADMIN_ALLOWED_ORIGINS','https://admin.example.test');Deno.env.set('ADMIN_SECRET','test-only-webhook-key-0123456789abcdef');Deno.env.set('NOTION_TOKEN','test-only-notion');
 const originalServe=Deno.serve;(Deno as any).serve=()=>({});
 const {handleAdminSecurity,notionDatabaseLinks,webhookViewUrl,chooseDbLinks}=await import('../admin-security/index.ts');(Deno as any).serve=originalServe;
+// (강사계정 261123) 강사 계정 시험도 같은 CI 단계(web-checks · 배포)에서 돈다 — .github 작업 파일은 그대로 둔다. 환경 값을 넣은 뒤에 불러온다.
+await import('./teacherAccess_test.ts');
 async function withFetch(fn:(action:string,data:any,url:string)=>unknown,run:()=>Promise<void>){const old=fetch;globalThis.fetch=(async(input:any,init:any)=>{const b=init?.body?JSON.parse(init.body):{};return new Response(JSON.stringify(await fn(b.p_action,b.p_data,String(input))),{headers:{'Content-Type':'application/json'}});}) as typeof fetch;try{await run();}finally{globalThis.fetch=old;Deno.env.delete('ADMIN_SECURITY_ENABLED');}}
 const request=(body:any,origin='https://admin.example.test',key='')=>new Request('https://mock.supabase.co/functions/v1/admin-security',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','x-admin-key':key},body:JSON.stringify(body)});
 const ready={initialized:true,password_set:true};
@@ -12,7 +15,7 @@ Deno.test('password policy: 8-128 chars, no surrounding spaces, never the initia
 Deno.test('three-month reminder clamps month ends',()=>{assert(nextRecommended('2026-01-31T12:00:00.000Z')==='2026-04-30T12:00:00.000Z');});
 Deno.test('random tokens and constant-time compare',()=>{assert(/^[0-9a-f]{64}$/.test(randomToken()));assert(equalSecret('a','a'));assert(!equalSecret('a','b'));assert(!equalSecret('a','aa'));});
 Deno.test('legacy mode preserves valid old credentials',async()=>{Deno.env.delete('ADMIN_SECURITY_ENABLED');assert(await authorizeKey(request({}),'legacy','legacy'));assert(!await authorizeKey(request({}),'bad','legacy'));assert(!await authorizeKey(request({}),'',''));});
-for(const [kind,route,expected] of [['webhook','generate-classes',true],['webhook','toggle-report-link',true],['webhook','notion-router',true],['session','notion-router',false],['webhook','sync-registration-textbook/create-individual',true],['webhook','sync-registration-textbook/create-class',true],['webhook','sync-textbook-distribution/from-cart',true],['webhook','sync-textbook-distribution/from-cart/queue/',true],['webhook','process-sync-queue/send-report',false],['session','generate-classes/kiosk-checkin',false],['kiosk','kiosk-checkin',true],['kiosk','list-students?kiosk=1',true],['kiosk','list-students',false],['kiosk','get-legal-document-data',false],['kiosk','admin-security',false],['kiosk','generate-classes',false],['webhook','school-api',false],['webhook','get-legal-document-data',false],['webhook','admin-security',false],['session','kiosk-checkin',true],['session','toggle-report-link',false],['session','sync-school-calendar',false],['session','school-api',true],['session','textbook-api',true],['webhook','textbook-api',false],['session','get-legal-document-data',true],['session','generate-classes',false],['internal','process-sync-queue',true],['none','generate-classes',false]] as const){Deno.test(`credential scope ${kind} -> ${route}: ${expected}`,()=>withFetch(()=>({kind}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');const r=new Request(`https://mock.supabase.co/functions/v1/${route}`);assert(await authorizeKey(r,'test-only','')===expected);}));}
+for(const [kind,route,expected] of [['webhook','generate-classes',true],['webhook','toggle-report-link',true],['webhook','notion-router',true],['session','notion-router',false],['webhook','sync-registration-textbook/create-individual',true],['webhook','sync-registration-textbook/create-class',true],['webhook','sync-textbook-distribution/from-cart',true],['webhook','sync-textbook-distribution/from-cart/queue/',true],['webhook','process-sync-queue/send-report',false],['session','generate-classes/kiosk-checkin',false],['kiosk','kiosk-checkin',true],['kiosk','list-students?kiosk=1',true],['kiosk','list-students',false],['kiosk','get-legal-document-data',false],['kiosk','admin-security',false],['kiosk','generate-classes',false],['webhook','school-api',false],['webhook','get-legal-document-data',false],['webhook','admin-security',false],['session','kiosk-checkin',true],['session','toggle-report-link',false],['session','sync-school-calendar',true],['kiosk','sync-school-calendar',false],['none','sync-school-calendar',false],['webhook','sync-school-calendar',true],['session','school-api',true],['session','textbook-api',true],['webhook','textbook-api',false],['session','get-legal-document-data',true],['session','generate-classes',false],['internal','process-sync-queue',true],['none','generate-classes',false]] as const){Deno.test(`credential scope ${kind} -> ${route}: ${expected}`,()=>withFetch(()=>({kind}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');const r=new Request(`https://mock.supabase.co/functions/v1/${route}`);assert(await authorizeKey(r,'test-only','')===expected);}));}
 Deno.test('route name is the function even without the /functions/v1 prefix',()=>withFetch(()=>({kind:'webhook'}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');assert(await authorizeKey(new Request('http://edge.local/sync-registration-textbook/create-class'),'test-only',''));assert(!await authorizeKey(new Request('http://edge.local/process-sync-queue/send-report'),'test-only',''));}));
 Deno.test('an appended /functions/v1/<route> cannot borrow another route scope',()=>withFetch(()=>({kind:'kiosk'}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');
   for(const url of ['http://edge.local/cascade-delete/functions/v1/kiosk-checkin','http://edge.local/list-students/functions/v1/kiosk-checkin','https://mock.supabase.co/functions/v1/cascade-delete/functions/v1/kiosk-checkin','https://mock.supabase.co/functions/v1/cascade-delete/functions/v1/list-students?kiosk=1'])assert(!await authorizeKey(new Request(url),'test-only',''),url);
@@ -74,10 +77,10 @@ Deno.test('webhook view link: finds the view named 웹훅등록 with the views A
   try{assert(await webhookViewUrl(db)===`https://www.notion.so/${db}?v=${v2}`);assert(seen.every(([,v])=>v==='2026-03-11')&&seen[0][0].includes('database_id='+db));
     globalThis.fetch=(async()=>new Response('{}',{status:404})) as typeof fetch;assert(await webhookViewUrl(db)==='');}finally{globalThis.fetch=old;}});
 Deno.test('webhook links need a valid admin session',()=>withFetch((action)=>action==='webhook-status'?{error:'다시 로그인해 주세요.',status:401}:{ok:true},async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');assert((await handleAdminSecurity(request({action:'webhook-links'},undefined,'bad'))).status===401);}));
-Deno.test('admin settings webhook checklist covers exactly the webhook routes with unique item ids',async()=>{const js=await Deno.readTextFile(new URL('../../../admin_settings.js',import.meta.url));const block=js.slice(js.indexOf('const CHECKLIST=['),js.indexOf('function route('));
-  const routes=[...new Set([...block.matchAll(/route\('([a-z-]+)'\)/g)].map(m=>m[1]))].sort();
-  assert(JSON.stringify(routes)===JSON.stringify([...SECURITY_WEBHOOK_ROUTES].filter(r=>r!=='notion-router').sort()),'admin_settings.js CHECKLIST routes must match SECURITY_WEBHOOK_ROUTES (except the notion-router dispatcher)');
-  const ids=[...block.matchAll(/\['([a-z0-9-]+)','[^']*',(BUTTON|AUTO),/g)].map(m=>m[1]);assert(ids.length>=30&&new Set(ids).size===ids.length&&ids.every(id=>/^[a-z0-9-]{1,64}$/.test(id)),'checklist item ids must be unique');});
+// 261123: 옛 관리자 설정 웹 화면(체크리스트 원본)을 없앰 — 연결표(webhookRoutes.ts)가 원본. 연결표의 함수는 모두 웹훅 키로 지키는 경로, 항목 ID는 고유.
+Deno.test('webhook route table only uses key-protected webhook routes with unique item ids',()=>{const routes=[...new Set(WEBHOOK_ROUTES.map(r=>r.fn))];
+  assert(routes.length>0&&routes.every(r=>r!=='notion-router'&&SECURITY_WEBHOOK_ROUTES.has(r)),'every WEBHOOK_ROUTES function must be in SECURITY_WEBHOOK_ROUTES');
+  const ids=WEBHOOK_ROUTES.map(r=>r.id);assert(ids.length>=30&&new Set(ids).size===ids.length&&ids.every(id=>/^[a-z0-9-]{1,64}$/.test(id)),'route item ids must be unique');});
 Deno.test('webhook checks pass only boolean true and links refresh is rate limited',async()=>{const calls:any[]=[];await withFetch((action,data)=>{calls.push([action,data]);if(action==='links-get')return {links:{'등록(학원)':{db:'https://www.notion.so/'+'a'.repeat(32),view:null}},updated_at:'2026-10-13T00:00:00Z'};return {ok:true,checked_at:'2026-10-13T00:00:00Z'};},async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');
   assert((await handleAdminSecurity(request({action:'webhook-check',item:'reg-end',checked:'yes'},undefined,'s'))).status===200);
   assert(calls.find(([a])=>a==='webhook-check')[1].checked===false);
@@ -121,3 +124,173 @@ Deno.test('webhook DB links: new checklist names also find the old DB titles (v2
   assert(pickDbLink({'교재결제(학원)':u('e')},'청구결제(학원)')===u('e'));
   assert(pickDbLink({'진도교재(학원)':u('f')},'진도관리(학원)')===u('f'));
   assert(pickDbLink({},'청구서(학원)')==='');});
+// ---------- (v2.8.0 항목 113) 외부 키: Vault 먼저 · 없으면 Secret, 열면 연결 상태가 보임(10분 다시 씀), 값은 어디에도 안 나감 ----------
+{
+const ek=await import('./externalKeys.ts');
+const {neisRows}=await import('./neisSchool.ts');
+const {searchTitle}=await import('./bookSources.ts');
+const {KEY_RECHECK_MS}=await import('../admin-security/index.ts');
+const FAKE='TEST-ONLY-FAKE-KEY-0000',FAKE2='TEST-ONLY-FAKE-KEY-1111',ENVK='TEST-ONLY-SECRET-KEY-9999';
+// Vault 흉내: hada_external_key RPC만 받는다. 상대 서버(나이스 · 도서관)는 goodKey면 맞음, 아니면 틀림(down이면 500).
+function fakeServer(vault:Record<string,{value:string,changed_at:string}>,opts:{down?:boolean,goodKey?:string,sourceDown?:boolean}={},checks:Record<string,any>={}){
+  const seen:{url:string,body:string,auth:string}[]=[];
+  const fn=(async(input:any,init:any)=>{const url=String(input),body=String(init?.body??''),auth=String(init?.headers?.Authorization??'');seen.push({url,body,auth});
+    const j=(v:unknown,status=200)=>new Response(JSON.stringify(v),{status,headers:{'Content-Type':'application/json'}});
+    const good=opts.goodKey??'';
+    if(url.includes('/rpc/hada_external_key')){if(opts.down)return new Response('x',{status:404});const b=JSON.parse(body),d=b.p_data??{};
+      if(b.p_action==='read')return j({keys:Object.fromEntries(Object.entries(vault).map(([k,v])=>[k,v.value]))});
+      if(b.p_action==='status')return j({keys:Object.fromEntries(Object.entries(vault).map(([k,v])=>[k,{changed_at:v.changed_at}])),checks});
+      if(b.p_action==='set'){vault[d.name]={value:d.value,changed_at:'2026-11-23T05:00:00Z'};delete checks[d.name];return j({ok:true,changed_at:'2026-11-23T05:00:00Z'});}
+      if(b.p_action==='checked'){checks[d.name]={source:d.source,state:d.state,checked_at:new Date().toISOString()};return j({ok:true,checked_at:checks[d.name].checked_at});}
+      if(b.p_action==='clear'){delete vault[d.name];delete checks[d.name];return j({ok:true});}
+      return j({error:'x',status:400});}
+    if(url.includes('/rpc/hada_security_command')){const b=JSON.parse(body);if(b.p_action==='profile')return j({password_hash:'x',changed_at:'2026-11-01T00:00:00Z',version:2,must_change:opts.goodKey==='MUST'});return j({ok:true});}
+    if(url.startsWith('https://open.neis.go.kr/')){if(opts.sourceDown)return j({},500);const k=new URL(url).searchParams.get('KEY');return k===good?j({schoolInfo:[{head:[{list_total_count:1},{RESULT:{CODE:'INFO-000'}}]},{row:[{SCHUL_NM:'예시중학교'}]}]}):j({RESULT:{CODE:'ERROR-290',MESSAGE:'인증키가 유효하지 않습니다.'}});}
+    if(url.startsWith('https://www.nl.go.kr/')){if(opts.sourceDown)return j({},500);const k=new URL(url).searchParams.get('cert_key');return k===good?j({docs:[]}):j({RESULT:'ERROR',ERR_CODE:'011',ERR_MESSAGE:'유효하지 않은 인증키 값입니다.'});}
+    return j({},404);}) as typeof fetch;
+  return {fn,seen};
+}
+async function withServer(srv:{fn:typeof fetch},run:()=>Promise<void>){const old=fetch,logs:string[]=[];const oc={e:console.error,w:console.warn,l:console.log};
+  const cap=(...a:unknown[])=>{logs.push(a.map(String).join(' '));};console.error=cap;console.warn=cap;console.log=cap;
+  globalThis.fetch=srv.fn;ek.forgetExternalKeys();
+  try{await run();}finally{globalThis.fetch=old;console.error=oc.e;console.warn=oc.w;console.log=oc.l;ek.forgetExternalKeys();Deno.env.delete('ADMIN_SECURITY_ENABLED');for(const n of [...ek.EXTERNAL_KEYS,'KAKAO_REST_KEY'])Deno.env.delete(n);}
+  return logs;}
+const noValue=(s:string)=>{for(const v of [FAKE,FAKE2,ENVK])assert(!s.includes(v),'value leaked: '+s.slice(0,200));assert(!/FAKE-KEY|SECRET-KEY/.test(s),'partial leak');};
+const outside=(srv:{seen:{url:string}[]})=>srv.seen.filter(s=>!s.url.includes('/rpc/')).length;
+Deno.test('external key: only NEIS and NL (Kakao removed in item 113)',()=>{assert(ek.EXTERNAL_KEYS.join()==='NEIS_API_KEY,NL_CERT_KEY');assert(!ek.isExternalKeyName('KAKAO_REST_KEY'));});
+Deno.test('external key: Vault value first, Secret when Vault has none, Secret when the store is down',async()=>{
+  const logs1=await withServer(fakeServer({NEIS_API_KEY:{value:FAKE,changed_at:'x'}}),async()=>{Deno.env.set('NEIS_API_KEY',ENVK);assert(await ek.externalKey('NEIS_API_KEY')===FAKE);assert(await ek.externalKeySource('NEIS_API_KEY')==='app');});
+  await withServer(fakeServer({}),async()=>{Deno.env.set('NEIS_API_KEY',ENVK);assert(await ek.externalKey('NEIS_API_KEY')===ENVK);assert(await ek.externalKeySource('NEIS_API_KEY')==='secret');assert(await ek.externalKey('NL_CERT_KEY')==='');});
+  const logs3=await withServer(fakeServer({},{down:true}),async()=>{Deno.env.set('NEIS_API_KEY',ENVK);assert(await ek.externalKey('NEIS_API_KEY')===ENVK);});
+  for(const l of [...logs1,...logs3])noValue(l);});
+Deno.test('external key: short cache, one store read per burst, a new key is used after the cache is cleared',async()=>{
+  const vault:Record<string,any>={NL_CERT_KEY:{value:FAKE,changed_at:'x'}};const srv=fakeServer(vault);
+  await withServer(srv,async()=>{await Promise.all([ek.externalKey('NL_CERT_KEY'),ek.externalKey('NEIS_API_KEY'),ek.externalKey('NL_CERT_KEY')]);
+    assert(srv.seen.filter(s=>s.url.includes('hada_external_key')).length===1);
+    vault.NL_CERT_KEY.value=FAKE2;assert(await ek.externalKey('NL_CERT_KEY')===FAKE,'cached within window');
+    ek.forgetExternalKeys();assert(await ek.externalKey('NL_CERT_KEY')===FAKE2,'next request reads the new key');assert(ek.CACHE_MS<=5000);});});
+Deno.test('NEIS and book search use the Vault key (Secret also set); book search never calls Kakao',async()=>{
+  const srv=fakeServer({NEIS_API_KEY:{value:FAKE,changed_at:'x'},NL_CERT_KEY:{value:FAKE,changed_at:'x'}},{goodKey:FAKE});
+  await withServer(srv,async()=>{for(const n of [...ek.EXTERNAL_KEYS,'KAKAO_REST_KEY'])Deno.env.set(n,ENVK);
+    assert((await neisRows('schoolInfo',{SCHUL_NM:'예시'})).length===1);await searchTitle('예시 교재');
+    const ext=srv.seen.filter(s=>!s.url.includes('/rpc/'));
+    assert(ext.some(s=>new URL(s.url).searchParams.get('KEY')===FAKE));assert(ext.some(s=>new URL(s.url).searchParams.get('cert_key')===FAKE));
+    assert(!ext.some(s=>s.url.includes('kakao')),'no Kakao call');assert(!ext.some(s=>s.url.includes(ENVK)),'Secret not used when Vault has a key');});});
+Deno.test('NEIS and book search still work with Secret only (academies that never used the app keys)',async()=>{
+  const srv=fakeServer({},{goodKey:ENVK});
+  await withServer(srv,async()=>{for(const n of ek.EXTERNAL_KEYS)Deno.env.set(n,ENVK);
+    assert((await neisRows('schoolInfo',{SCHUL_NM:'예시'})).length===1);await searchTitle('예시 교재');
+    assert(outside(srv)===2&&srv.seen.filter(s=>!s.url.includes('/rpc/')).every(s=>s.url.includes(ENVK)));});});
+const call=async(body:any,bodies:string[])=>{const r=await handleAdminSecurity(request(body,'https://admin.example.test','test-session'));const t=await r.text();bodies.push(t);return {status:r.status,data:JSON.parse(t)};};
+Deno.test('admin keys: opening the page checks each key once and shows the state; within 10 minutes it reuses the result',async()=>{
+  const vault:Record<string,any>={},checks:Record<string,any>={};const srv=fakeServer(vault,{goodKey:ENVK},checks);const bodies:string[]=[];
+  const logs=await withServer(srv,async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');Deno.env.set('NEIS_API_KEY',ENVK);
+    let s=await call({action:'keys-status',check:true},bodies);assert(s.status===200);
+    assert(Object.keys(s.data.keys).join()==='NEIS_API_KEY,NL_CERT_KEY','no Kakao row');
+    assert(s.data.keys.NEIS_API_KEY.source==='secret'&&s.data.keys.NEIS_API_KEY.state==='ok'&&s.data.keys.NEIS_API_KEY.checked_at,'secret key checked on open');
+    assert(s.data.keys.NL_CERT_KEY.source===''&&s.data.keys.NL_CERT_KEY.state==='none','no key = none');
+    assert(outside(srv)===1,'one outside call (NEIS only)');
+    s=await call({action:'keys-status',check:true},bodies);assert(s.data.keys.NEIS_API_KEY.state==='ok'&&outside(srv)===1,'reused within 10 minutes');
+    s=await call({action:'keys-status'},bodies);assert(s.data.keys.NEIS_API_KEY.state==='ok'&&outside(srv)===1,'plain status never calls outside');
+    checks.NEIS_API_KEY.checked_at=new Date(Date.now()-KEY_RECHECK_MS-1000).toISOString();
+    s=await call({action:'keys-status',check:true},bodies);assert(outside(srv)===2,'checked again after 10 minutes');
+    let r=await call({action:'key-set',name:'NEIS_API_KEY',value:FAKE},bodies);assert(r.status===200&&r.data.test==='wrong'&&r.data.changed_at);
+    s=await call({action:'keys-status',check:true},bodies);assert(s.data.keys.NEIS_API_KEY.source==='app'&&s.data.keys.NEIS_API_KEY.state==='wrong'&&outside(srv)===3,'saved app key: result from the save, no extra call');
+    r=await call({action:'key-test',name:'NEIS_API_KEY'},bodies);assert(r.data.test==='wrong'&&r.data.source==='app'&&outside(srv)===4,'[연결 확인] always asks again');
+    r=await call({action:'key-clear',name:'NEIS_API_KEY'},bodies);assert(r.data.ok&&r.data.secret===true&&!vault.NEIS_API_KEY);
+    s=await call({action:'keys-status',check:true},bodies);assert(s.data.keys.NEIS_API_KEY.source==='secret'&&s.data.keys.NEIS_API_KEY.state==='ok'&&outside(srv)===5,'after delete: back to Secret, checked again');
+    assert(await ek.externalKey('NEIS_API_KEY')===ENVK);
+    r=await call({action:'key-set',name:'NL_CERT_KEY',value:ENVK},bodies);assert(r.data.test==='ok');
+    for(const bad of [{action:'key-set',name:'KAKAO_REST_KEY',value:FAKE},{action:'key-set',name:'NOTION_TOKEN',value:FAKE},{action:'key-set',name:'NEIS_API_KEY',value:' '+FAKE},{action:'key-set',name:'NEIS_API_KEY',value:'short'},{action:'key-set',name:'NEIS_API_KEY',value:FAKE+'\n'},{action:'key-set',name:'NEIS_API_KEY'}]){const x=await call(bad,bodies);assert(x.status===400,JSON.stringify(bad).slice(0,40));}});
+  for(const t of [...bodies,...logs])noValue(t);});
+Deno.test('admin keys: other side down shows "unknown" and is asked again after a minute, not ten',async()=>{
+  const checks:Record<string,any>={};const bodies:string[]=[];
+  await withServer(fakeServer({},{sourceDown:true},checks),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');Deno.env.set('NL_CERT_KEY',ENVK);
+    const s=await call({action:'keys-status',check:true},bodies);assert(s.data.keys.NL_CERT_KEY.state==='unknown');
+    checks.NL_CERT_KEY.checked_at=new Date(Date.now()-61000).toISOString();
+    const t=await call({action:'keys-status',check:true},bodies);assert(t.data.keys.NL_CERT_KEY.checked_at!==checks.x,'re-asked');assert(Date.now()-Date.parse(t.data.keys.NL_CERT_KEY.checked_at)<5000);});
+  for(const t of bodies)noValue(t);});
+Deno.test('admin keys: blocked on the initial password and without a session; store down gives a plain message',async()=>{
+  await withServer(fakeServer({},{goodKey:'MUST'}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');const r=await handleAdminSecurity(request({action:'key-set',name:'NEIS_API_KEY',value:FAKE},'https://admin.example.test','s'));assert(r.status===409);noValue(await r.text());});
+  await withServer({fn:(async(input:any)=>String(input).includes('hada_security_command')?new Response(JSON.stringify({error:'다시 로그인해 주세요.',status:401})):new Response('{}')) as typeof fetch},async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');const r=await handleAdminSecurity(request({action:'keys-status',check:true}));assert(r.status===401);});
+  const logs=await withServer(fakeServer({},{down:true}),async()=>{Deno.env.set('ADMIN_SECURITY_ENABLED','true');const r=await handleAdminSecurity(request({action:'key-set',name:'NEIS_API_KEY',value:FAKE},'https://admin.example.test','s'));assert(r.status===503);const t=await r.text();noValue(t);assert(/키 저장소/.test(t));});
+  for(const l of logs)noValue(l);});
+}
+// (v2.8.0, 261123 대표 "0000 비밀번호로 예시 데이터 비우기 / 한번 진행하고 나면 막히도록") 초기 비밀번호 세션은 예시 데이터 비우기만 더 받는다.
+// 가짜 서버: SQL(hada_security_command)은 실제 규칙대로 — must_change면 authorize는 늘 none, profile은 관리자 세션만(키오스크 거절).
+{
+  const {handleClearExampleData}=await (async()=>{const old=Deno.serve;(Deno as any).serve=()=>({});try{return await import('../clear-example-data/index.ts');}finally{(Deno as any).serve=old;}})();
+  const {authorizeInitialSetup,INITIAL_SETUP_ROUTES,SECURITY_BROWSER_ROUTES}=await import('./adminSecurity.ts');
+  const INIT=('a'.repeat(64)),KIOSK=('b'.repeat(64)),FAKE_WS='예시 학원';
+  type World={mustChange:boolean,flag:any,writes:any[],queued:any[],rpc:string[]};
+  const world=(over:Partial<World>={}):World=>({mustChange:true,flag:null,writes:[],queued:[],rpc:[],...over});
+  async function sessionsOf(){return {admin:await sha256(INIT),kiosk:await sha256(KIOSK)};}
+  async function withWorld(w:World,run:()=>Promise<void>){
+    const s=await sessionsOf();const old=fetch;
+    globalThis.fetch=(async(input:any,init:any)=>{
+      const url=String(input),method=init?.method??'GET',body=init?.body?JSON.parse(init.body):null,j=(v:unknown,st=200)=>new Response(JSON.stringify(v),{status:st,headers:{'Content-Type':'application/json'}});
+      if(url.includes('/rpc/hada_security_command')){
+        const a=body.p_action,d=body.p_data??{};w.rpc.push(a);
+        if(a==='internal')return j({internal_key:'f'.repeat(64)});
+        if(a==='authorize'){if(w.mustChange)return j({kind:'none'});if(d.candidate===s.admin)return j({kind:'session'});if(d.candidate===s.kiosk)return j({kind:'kiosk'});return j({kind:'none'});}
+        if(d.session_hash!==s.admin)return j({error:'다시 로그인해 주세요.',status:401});
+        if(a==='profile')return j({password_hash:'x',changed_at:'2026-11-23T00:00:00Z',version:1,must_change:w.mustChange});
+        if(a.startsWith('webhook-')&&w.mustChange)return j({error:'초기 비밀번호를 먼저 변경해 주세요.',status:409});
+        return j({ok:true});
+      }
+      if(url.includes('/rest/v1/hada_setup_flags')){
+        if(method==='GET')return j(w.flag?[{value:w.flag,updated_at:'2026-11-23T00:00:00Z'}]:[]);
+        w.writes.push(body);const v=Array.isArray(body)?body[0].value:body.value;
+        if(method==='PATCH'){if(w.flag?.state!=='running')return j([]);w.flag=v;return j([{}]);}
+        w.flag=v;return new Response(null,{status:201});
+      }
+      if(url.includes('/rest/v1/sync_queue')){w.queued.push(body);return new Response(null,{status:201});}
+      if(url.includes('/users/me'))return j({bot:{workspace_name:FAKE_WS}});
+      if(url.includes('/search'))return j({results:[],has_more:false});
+      if(url.includes('/functions/v1/process-sync-queue'))return j({ok:true});
+      return j({});
+    }) as typeof fetch;
+    try{Deno.env.set('ADMIN_SECURITY_ENABLED','true');await run();await new Promise(r=>setTimeout(r,20));}finally{globalThis.fetch=old;Deno.env.delete('ADMIN_SECURITY_ENABLED');}
+  }
+  const clear=(body:any,key=INIT)=>handleClearExampleData(new Request('https://mock.supabase.co/functions/v1/clear-example-data',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':key},body:JSON.stringify(body)}));
+  const opts={sanitizeOps:false,sanitizeResources:false};
+  Deno.test({...opts,name:'0000 session: example clear state · start · stop are open (workspace name still required)',fn:()=>{const w=world();return withWorld(w,async()=>{
+    const st=await clear({action:'state'});const sd=await st.json();assert(st.status===200&&sd.canStart===true&&sd.flag===null,JSON.stringify(sd));
+    const bad=await clear({action:'start',workspace:'다른 이름',dbs:['출석(학원) DB']});assert(bad.status===400&&w.writes.length===0&&w.queued.length===0);
+    const ok=await clear({action:'start',workspace:FAKE_WS,dbs:['출석(학원) DB']});const od=await ok.json();assert(ok.status===200&&od.state==='running'&&w.queued.length===1,JSON.stringify(od));
+    // (261123 안A) 0000은 고르지 못한다: 출석 하나만 보내도 비울 DB 전부(남기는 칸 keep 없음), state · status는 full:true
+    assert(Array.isArray(od.keep)&&od.keep.length===0,'0000 start keeps nothing: '+JSON.stringify(od.keep));assert(sd.full===true);
+    const fs0=await (await clear({action:'status'})).json();assert(fs0.full===true,JSON.stringify(fs0));
+    const stop=await clear({action:'stop'});assert(stop.status===200&&(await stop.json()).flag.state==='stopped');
+    assert(w.rpc.includes('profile'));});}});
+  Deno.test({...opts,name:'0000 session: no other route or admin action opens',fn:()=>{const w=world();return withWorld(w,async()=>{
+    for(const route of [...SECURITY_BROWSER_ROUTES].filter(r=>r!=='clear-example-data').concat(['generate-classes','process-sync-queue','send-report','toggle-report-link','admin-security'])){
+      const r=new Request(`https://mock.supabase.co/functions/v1/${route}`);
+      assert(!await authorizeKey(r,INIT,''),'authorizeKey '+route);assert(!await authorizeInitialSetup(r,INIT),'initial '+route);}
+    assert(INITIAL_SETUP_ROUTES.size===1&&INITIAL_SETUP_ROUTES.has('clear-example-data'));
+    for(const body of [{action:'keys-status'},{action:'key-set',name:'NEIS_API_KEY',value:'test-only-value-123'},{action:'key-test',name:'NEIS_API_KEY'},{action:'key-clear',name:'NEIS_API_KEY'},{action:'webhook-status'},{action:'webhook-links'},{action:'root-title'},{action:'webhook-check',item:'x',checked:true},{action:'webhook-finish'}]){
+      const r=await handleAdminSecurity(request(body,'https://admin.example.test',INIT));assert(r.status===409,body.action+' '+r.status);}
+    // 비밀번호 바꾸기 길(profile)은 그대로 열려 있다.
+    assert((await handleAdminSecurity(request({action:'profile'},'https://admin.example.test',INIT))).status===200);});}});
+  Deno.test({...opts,name:'0000 path is closed to kiosk sessions, unknown tokens, legacy mode and changed passwords',fn:async()=>{
+    const w=world();await withWorld(w,async()=>{
+      for(const key of [KIOSK,'c'.repeat(64),'','0000','not-hex-'+'a'.repeat(56)]){const r=await clear({action:'state'},key);assert(r.status===401,key+' '+r.status);}
+      // 64자리 hex가 아닌 값은 서버에 묻지도 않는다(profile은 KIOSK · 'c'… 두 번만).
+      assert(w.rpc.filter(a=>a==='profile').length===2,w.rpc.join());});
+    // 비밀번호를 정한 뒤(must_change=false): 0000 길은 닫히고 보통 관리자 세션 규칙만 남는다.
+    const after=world({mustChange:false});await withWorld(after,async()=>{const r=new Request('https://mock.supabase.co/functions/v1/clear-example-data');assert(!await authorizeInitialSetup(r,INIT));assert((await clear({action:'state'},KIOSK)).status===401);const st=await (await clear({action:'state'})).json();assert(st.full===false);
+      // 새 비밀번호로 로그인한 관리자는 지금처럼 고른다(출석만 → 나머지는 keep)
+      const ok=await (await clear({action:'start',workspace:FAKE_WS,dbs:['출석(학원) DB']})).json();assert(ok.keep.length>0&&!ok.keep.includes('출석(학원) DB'),JSON.stringify(ok.keep));
+      assert((await (await clear({action:'status'})).json()).full===undefined);});
+    Deno.env.delete('ADMIN_SECURITY_ENABLED');assert(!await authorizeInitialSetup(new Request('https://mock.supabase.co/functions/v1/clear-example-data'),INIT));}});
+  Deno.test({...opts,name:'after one finished clear (done) or on a running academy (locked), start is refused for 0000 and for a changed password',fn:async()=>{
+    for(const state of ['done','locked']){
+      for(const mustChange of [true,false]){
+        const w=world({mustChange,flag:{state,done:12,finishedAt:'2026-11-23T00:00:00Z'}});
+        await withWorld(w,async()=>{
+          const st=await (await clear({action:'state'})).json();assert(st.canStart===false,state);
+          const r=await clear({action:'start',workspace:FAKE_WS,dbs:['출석(학원) DB']});assert(r.status===409,`${state} ${mustChange} ${r.status}`);
+          assert(w.queued.length===0&&w.writes.length===0&&w.flag.state===state);});
+      }
+    }}});
+}

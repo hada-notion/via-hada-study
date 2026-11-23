@@ -2,6 +2,13 @@ import { SecurityError,securityEnabled,securityRpc,sha256,randomToken,validatePa
 import { NOTION_API,NOTION_TOKEN,NOTION_VERSION } from '../_shared/constants.ts';
 import { normalizeBareDbTitle } from '../_shared/dbNames.ts';
 import { narrowSameName,rootTitle } from '../_shared/appCopy.ts';
+import { EXTERNAL_KEYS,isExternalKeyName,externalKeyRpc,forgetExternalKeys,externalKey } from '../_shared/externalKeys.ts';
+import { testExternalKey } from '../_shared/externalKeyCheck.ts';
+import { teacherRpc,normalizePhone,TEACHER_DB } from '../_shared/teacherAccess.ts';
+import { listApp } from '../_shared/appCopy.ts';
+import { getPage } from '../_shared/notionClient.ts';
+// 관리자 설정을 열 때 연결 확인 결과를 다시 쓰는 시간(1안 10분 — 2안 하루 한 번 · 3안 매번은 결과 문서). 확인 못 함은 1분 뒤 다시.
+export const KEY_RECHECK_MS=10*60*1000,KEY_RECHECK_UNKNOWN_MS=60*1000;
 // While security is disabled the function only answers with a fixed 503 message and no secrets, so the
 // browser must be able to read it for the legacy-login fallback even before ADMIN_ALLOWED_ORIGINS is set.
 function cors(req:Request,enforceOrigin:boolean):Record<string,string> {
@@ -168,6 +175,110 @@ export async function handleAdminSecurity(req:Request):Promise<Response> {
       const response=await securityRpc('webhook-finish',{session_hash:await sha256(session),force:b.force===true});
       if(response.needs_confirm)return new Response(JSON.stringify({error:'최근 7일 안에 이전 키로 호출된 버튼이 있습니다. 지금 완료하면 그 버튼은 동작하지 않습니다.',needs_confirm:true}),{status:409,headers});
       return result({ok:true,changed_at:response.changed_at});
+    }
+    // (강사계정 261123) 강사 로그인 · 비밀번호 바꾸기 · 로그아웃. 강사 세션은 원장 세션 표에 들어가지 않는다(hada_teacher_command).
+    if(b.action==='teacher-login'){
+      await securityRpc('limit',{bucket:'security-teacher-login',max:120,seconds:3600});
+      const phone=normalizePhone(b.phone);const fail=()=>new SecurityError(401,'아이디 또는 비밀번호가 올바르지 않아요.');
+      const acc=phone?await teacherRpc('account',{phone}):{found:false};
+      if(!acc.found){await hashPassword(String(b.password??'').slice(0,128));throw fail();} // 없는 번호도 같은 시간 · 같은 말
+      // 첫 비밀번호(번호)는 하이픈 · 공백을 넣어 쳐도 같은 번호로 본다. 바꾼 비밀번호는 그대로 비교.
+      const ok=await verifyPassword(acc.must_change?(normalizePhone(b.password)||b.password):b.password,acc.password_hash);
+      const token=randomToken();
+      // 노션 계정(강사 DB 사람 칸)은 앱 사본에 없으므로(SKIP_PROPS) 로그인 때 노션에서 한 번 읽어 세션에 둔다 — 메뉴 권한(편집허용) 대조용.
+      let users:string[]=[];
+      if(ok){try{const page=await getPage(acc.teacher_id);users=((page?.properties?.['노션 계정']?.people)??[]).map((u:any)=>String(u?.id??'')).filter(Boolean).slice(0,20);}catch(e){console.error('[admin-security] teacher notion account',(e as Error).message.slice(0,80));}}
+      await teacherRpc('login',{teacher_id:acc.teacher_id,verified:ok,version:acc.version,token_hash:await sha256(token),notion_users:users});
+      return result({session:token,role:'teacher',must_change:!!acc.must_change,name:acc.name});
+    }
+    if(b.action==='teacher-profile'){
+      const t=await teacherRpc('session',{session_hash:await sha256(session)});
+      return result({role:'teacher',name:t.name,must_change:!!t.must_change});
+    }
+    if(b.action==='teacher-change'){
+      await securityRpc('limit',{bucket:'security-teacher-change',max:60,seconds:3600});
+      const sessionHash=await sha256(session);
+      const t=await teacherRpc('session',{session_hash:sessionHash});
+      if(!await verifyPassword(b.current_password,t.password_hash))throw new SecurityError(401,'현재 비밀번호가 올바르지 않아요.');
+      const password=validatePassword(b.new_password);
+      if(password===b.current_password)throw new SecurityError(400,'현재 비밀번호와 다른 비밀번호를 입력해 주세요.');
+      if(password.replace(/\D/g,'')===t.phone||password===t.phone)throw new SecurityError(400,'휴대폰 번호와 다른 비밀번호를 정해 주세요.');
+      const r=await teacherRpc('change',{session_hash:sessionHash,expected_version:t.version,password_hash:await hashPassword(password)});
+      return result({ok:true,changed_at:r.changed_at,message:'바꿨어요. 새 비밀번호로 다시 로그인해요.'});
+    }
+    if(b.action==='teacher-logout'){if(session)await teacherRpc('logout',{session_hash:await sha256(session)});return result({ok:true});}
+    // 원장만: 강사 앱 계정 목록 · 켜기 · 끄기 · 첫 비밀번호로 되돌리기. 원장 세션(초기 비밀번호 상태 아님)만 — 강사 세션은 profile에서 401.
+    if(['teachers-status','teacher-enable','teacher-disable','teacher-reset'].includes(b.action)){
+      const ctx=await securityRpc('profile',{session_hash:await sha256(session)});
+      if(ctx.must_change)throw new SecurityError(409,'초기 비밀번호 상태입니다. 관리자 비밀번호를 먼저 바꿔 주세요.');
+      const rows=await listApp(TEACHER_DB as any);
+      const id32=(v:unknown)=>String(v??'').replace(/-/g,'').toLowerCase();
+      // 같은 번호 강사(노션 강사 DB 안): 이 번호들은 켜거나 되돌리지 못하게 막는다.
+      const count=new Map<string,number>();for(const r of rows as any[]){const ph=normalizePhone(r.props?.['연락처']);if(ph)count.set(ph,(count.get(ph)??0)+1);}
+      if(b.action==='teachers-status'){
+        const acc=await teacherRpc('list');const byId=new Map((acc.accounts??[]).map((a:any)=>[a.teacher_id,a]));
+        return result({teachers:(rows as any[]).map((r)=>{const id=id32(r.id),ph=normalizePhone(r.props?.['연락처']),a:any=byId.get(id);
+          return {teacher_id:id,name:String(r.props?.['이름']??''),phone:ph,phone_raw:String(r.props?.['연락처']??''),duplicate:!!ph&&(count.get(ph)??0)>1,
+            account:a?{enabled:!!a.enabled,must_change:!!a.must_change,locked:!!a.locked,locked_until:a.locked_until,changed_at:a.changed_at,phone:a.phone}:null};})});
+      }
+      await securityRpc('limit',{bucket:'security-teacher-admin',max:120,seconds:3600});
+      const id=id32(b.teacher_id);if(!/^[0-9a-f]{32}$/.test(id))throw new SecurityError(400,'강사를 골라 주세요.');
+      if(b.action==='teacher-disable'){await teacherRpc('disable',{teacher_id:id});return result({ok:true});}
+      const row:any=(rows as any[]).find((r)=>id32(r.id)===id);
+      if(!row)throw new SecurityError(404,'노션 강사 DB에서 그 강사를 찾지 못했어요. [동기화] 뒤 다시 해 주세요.');
+      const phone=normalizePhone(row.props?.['연락처']);
+      if(!phone)throw new SecurityError(400,'노션 강사 DB 연락처에 휴대폰 번호(010-0000-0000)를 먼저 넣어 주세요.');
+      if((count.get(phone)??0)>1)throw new SecurityError(409,'같은 휴대폰 번호인 강사가 노션 강사 DB에 둘 이상이에요. 연락처를 먼저 고쳐 주세요.');
+      const data={teacher_id:id,phone,name:String(row.props?.['이름']??'').slice(0,80),password_hash:await hashPassword(phone)};
+      await teacherRpc(b.action==='teacher-enable'?'enable':'reset',data);
+      return result({ok:true});
+    }
+    // (v2.8.0, 261123 키 자동 등록) 외부 키: 관리 앱 [관리자 설정]에서 넣으면 Vault에 저장 → 함수가 Vault 먼저 · 없으면 Secret.
+    // 값은 되돌려 주지 않는다(응답에는 있음 · 바꾼 날 · 확인 결과 · Secret에도 있는지만). 초기 비밀번호 상태에서는 막는다.
+    if(['keys-status','key-set','key-test','key-clear'].includes(b.action)){
+      const ctx=await securityRpc('profile',{session_hash:await sha256(session)});
+      if(ctx.must_change)throw new SecurityError(409,'초기 비밀번호 상태입니다. 관리자 비밀번호를 먼저 바꿔 주세요.');
+      if(b.action!=='keys-status'){
+        await securityRpc('limit',{bucket:'security-keys',max:30,seconds:3600});
+        if(!isExternalKeyName(b.name))throw new SecurityError(400,'지원하지 않는 키입니다.');
+      }
+      const store=async(action:string,data:Record<string,unknown>={})=>{try{return await externalKeyRpc(action,data);}catch(e){
+        const st=(e as {status?:number}).status;if(st&&st<500&&st!==404)throw new SecurityError(st,(e as Error).message);
+        console.error('[admin-security] external key store',action,(e as Error).message.slice(0,80));
+        throw new SecurityError(503,'키 저장소에 연결하지 못했습니다. 업데이트(마이그레이션)가 적용됐는지 확인해 주세요.');}};
+      // 연결 상태(대표 261123 "누르지 않아도 바로"): 키마다 지금 쓰는 키의 출처(app · secret · 없음)와 마지막 확인 결과.
+      // check=true(관리자 설정을 열 때)면 결과가 없거나 오래됐을 때만 상대 서버에 한 번 묻는다 — 10분(확인 못 함은 1분) 안이면 다시 씀.
+      const view=async(st:any,check:boolean,force:string|null)=>{
+        const out:Record<string,unknown>={};
+        await Promise.all(EXTERNAL_KEYS.map(async(n)=>{
+          const app=!!st.keys?.[n],secret=!!Deno.env.get(n),source=app?'app':secret?'secret':'';
+          let c=st.checks?.[n]??null;if(c&&c.source!==source)c=null;
+          let state:string|null=source?(c?.state??null):'none',checked_at:string|null=source?(c?.checked_at??null):null;
+          const age=c?Date.now()-Date.parse(c.checked_at):Infinity,ttl=c?.state==='unknown'?KEY_RECHECK_UNKNOWN_MS:KEY_RECHECK_MS;
+          if(source&&((check&&!(age<ttl))||force===n)){
+            const key=await externalKey(n);
+            if(key){state=await testExternalKey(n,key);const w=await store('checked',{name:n,source,state}).catch(()=>null);checked_at=w?.checked_at??new Date().toISOString();}
+          }
+          out[n]={app,changed_at:st.keys?.[n]?.changed_at??null,secret,source,state,checked_at};
+        }));
+        return Object.fromEntries(EXTERNAL_KEYS.map((n)=>[n,out[n]])); // 화면 줄 순서 그대로
+      };
+      if(b.action==='keys-status')return result({keys:await view(await store('status'),b.check===true,null)});
+      const name=b.name as (typeof EXTERNAL_KEYS)[number];
+      if(b.action==='key-set'){
+        if(typeof b.value!=='string'||!/^[!-~]{8,256}$/.test(b.value))throw new SecurityError(400,'키 형식이 올바르지 않습니다. 받은 키를 앞뒤 공백 없이 그대로 붙여 넣어 주세요.');
+        const saved=await store('set',{name,value:b.value});forgetExternalKeys();
+        const test=await testExternalKey(name,b.value);
+        await store('checked',{name,source:'app',state:test}).catch(()=>null);
+        return result({ok:true,changed_at:saved.changed_at,test});
+      }
+      if(b.action==='key-test'){
+        // [연결 확인]: 지금 함수가 쓰는 키(앱에서 넣은 값 먼저, 없으면 Secret)로 바로 다시 확인한다.
+        forgetExternalKeys();const keys:any=await view(await store('status'),false,name);const k=keys[name];
+        return result({test:k.source?k.state:null,source:k.source,checked_at:k.checked_at});
+      }
+      await store('clear',{name});forgetExternalKeys();
+      return result({ok:true,secret:!!Deno.env.get(name)});
     }
     throw new SecurityError(400,'지원하지 않는 작업입니다.');
   }catch(e){const status=e instanceof SecurityError?e.status:503;return new Response(JSON.stringify({error:e instanceof SecurityError?e.message:'처리하지 못했습니다. 서버 연결 상태를 확인해 주세요.'}),{status,headers});}

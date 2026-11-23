@@ -199,7 +199,7 @@ const APPMAP = {
 const APP_RT_ON = true /* 노션서버 PR #478(4db5fc9) 원본 배포 — app-api list 루틴(학원) DB */
 if (!APP_RT_ON) delete APPMAP.routines
 // 이번 범위 밖(다음 출시) · 노션 대응 없음 → 빈 배열(MAPPING.md)
-const APP_EMPTY = ["events", "reports", "tuition", "bookfees", "letters", "exams", "costs", "alims", "grades", "charges", "etcs", "files", "recs", "anotes", "series", "mk"]
+const APP_EMPTY = ["events", "reports", "tuition", "bookfees", "letters", "tests", "exams", "costs", "alims", "grades", "charges", "etcs", "files", "recs", "anotes", "series", "mk"]
 
 // ---------- 불러오기 ----------
 // app-api 호출 한 곳(261119, 노션서버 항목 100): Notion 한도(429)로 서버가 15초 넘게 기다릴 일이면 HTTP 503 { error, busy: true, retryAfterSec }로 끊는다.
@@ -218,6 +218,8 @@ async function appPostJson(url, init) {
 	}
 }
 async function appList({ url, anonKey, session }, db) {
+	// (강사계정 261123) 강사 세션은 편집허용 메뉴 화면이 읽는 DB(app-api "me" readDbs)만 받는다(서버도 403) — 그 밖은 빈 목록으로 두고 화면은 그대로
+	if (typeof window !== "undefined" && window.LIVE_READ_DBS && !window.LIVE_READ_DBS.has(db)) return []
 	const { res, body } = await appPostJson(String(url).replace(/\/+$/, "") + "/functions/v1/app-api", {
 		method: "POST",
 		headers: { "Content-Type": "application/json", "x-admin-key": session, Authorization: "Bearer " + anonKey, apikey: anonKey },
@@ -251,6 +253,7 @@ async function appLoad({ url, anonKey, session, target }) {
 	if (!out) throw new Error("DB 객체가 없습니다")
 	const dbs = [...new Set(Object.keys(APPMAP).map((coll) => APPMAP[coll].db))]
 	const raw = await appListMany({ url, anonKey, session }, dbs)
+	if (typeof window !== "undefined" && !target) window.APP_RAW = { raw, view: false } // 열린 화면 자동 갱신(liverefresh.js)이 바뀐 줄만 끼워 다시 계산
 	return appApply(raw, out)
 }
 // raw = { "<DB 제목>": Map(id → app-api 줄) } → out[coll]. 검사(check.cjs)도 이 함수를 쓴다.

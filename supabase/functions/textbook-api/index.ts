@@ -1,6 +1,6 @@
 // POST /functions/v1/textbook-api
 // 라이브러리(library.html, v2.5.118, Notion 라이브러리 DB). 관리자 로그인 세션만 통과한다(adminSecurity.ts의 브라우저 경로).
-//   search   { query }                       국립중앙도서관·카카오 검색(ISBN13이면 그 책) + 라이브러리에 이미 있는지(ISBN13)
+//   search   { query }                       국립중앙도서관 검색(ISBN13이면 그 책) + 라이브러리에 이미 있는지(ISBN13)
 //   register-custom { title, isbn13?, cover?, price?, pages?, series?, publisher?, units }  직접 추가 등록(v2.5.119, 교보문고에서 가져오기 v2.6.6)
 //   kyobo-book { pid }                       교보문고 상품번호 → 교재명·ISBN13·정가·출판사·목차 단원 후보(검색 목록에서 가져오기, v2.6.8)
 //   detail   { isbn13 }                      한 권의 정보·목차(국립중앙도서관에 있을 때) → 단원 후보
@@ -15,7 +15,9 @@
 //   series   {}                              시리즈 선택지 목록(v2.5.122)
 //   edit-series { op: add|rename|order|remove, … }  시리즈 선택지 추가·이름·순서·삭제(교재 0권만, v2.5.122)
 // 실제 로직은 _shared/textbookSearch.ts, 목차 규칙은 _shared/textbookToc.ts.
-import { CORS_HEADERS, requireAdminKey } from "../_shared/adminShared.ts"
+import { CORS_HEADERS, getCurrentAdminKey } from "../_shared/adminShared.ts"
+import { securityEnabled } from "../_shared/adminSecurity.ts"
+import { requireAccess } from "../_shared/teacherAccess.ts"
 import { TextbookError, addUnits, bookDetail, bookUnits, editUnits, kyoboBook, libraryBooks, parsePasted, registerBook, registerCustom, searchBooks, seriesList, editSeries, setCover, updateBook } from "../_shared/textbookSearch.ts"
 
 const json = (data: unknown, status = 200) => new Response(JSON.stringify(data), { status, headers: { ...CORS_HEADERS, "Content-Type": "application/json", "Cache-Control": "no-store" } })
@@ -23,7 +25,9 @@ const json = (data: unknown, status = 200) => new Response(JSON.stringify(data),
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: CORS_HEADERS })
   if (req.method !== "POST") return json({ error: "POST 요청만 지원합니다." }, 405)
-  const denied = await requireAdminKey(req)
+  // (강사계정 261123) 원장 세션 그대로 + 이 경로 메뉴 권한이 있는 강사 세션(_shared/teacherAccess.ts TEACHER_ROUTES).
+  const denied0 = await requireAccess(req, CORS_HEADERS, securityEnabled() ? "" : await getCurrentAdminKey())
+  const denied = denied0 instanceof Response ? denied0 : null
   if (denied) return denied
   try {
     const raw = await req.text()

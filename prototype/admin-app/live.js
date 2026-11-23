@@ -41,12 +41,14 @@ window.liveModeFor = function (search, hostname, protocol) {
   } catch (_) {}
   /* 보기만(P2 보기 칸): 이 칸의 화면은 노션 값을 보여 주기만 한다. 쓰는 단추는 끄고, 창의 칸은 잠그고, 그래도 값이 바뀌면 그 자리에서 되돌린다.
      고칠 것은 창 위 [노션에서 열기]로. (이 묶음들은 저장 층 대상이 아니라 노션에 갈 길도 없다) */
-  /* 0단계(대표 261117): 입력 칸(P1) 안에서도 노션 버튼 · 서버 동작이 따로 있는 화면은 보기만 — 라이브러리(교재 등록 = 서버가 단원까지) · 학교(학교 검색 = 학교 코드까지) */
+  /* 0단계(대표 261117): 입력 칸(P1) 안에서도 노션 버튼 · 서버 동작이 따로 있는 화면은 보기만 — 라이브러리(교재 등록 = 서버가 단원까지) · 학교(학교 검색 = 학교 코드까지). 261123 학교 검색 · 학사일정 가져오기는 앱에서(liveschool.js) — 학교 칸 고치기만 보기만 */
   /* 일정 쓰기(칸 P2e — 화면 묶음 없음, P2와 함께 켤 때만, 261119 원본검수 Z2): 켜면 일정 화면은 보기만에서 빠지고 저장 층(appsave events)으로 노션에 씀. 꺼져 있으면 보기만 */
   const EVW = gOn.has("P2") && gOn.has("P2e"); window.LIVE_EVW = EVW;
   /* 보강 쓰기(칸 P3m — 화면 묶음 없음, 보강 화면 칸 P3b와 함께 켤 때만, 261119 담당 (가)): 켜면 보강 화면이 보기만에서 빠지고 [저장]이 서버 보강 동작(livelesson.js liveMakeupSave)으로 */
   const MKW = gOn.has("P3b") && gOn.has("P3m"); window.LIVE_MKW = MKW;
-  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "schools"].filter((s) => !(EVW && s === "events") && !(MKW && s === "makeup"))); /* P3 수업은 걸음 1 = 보기만 */
+  /* 시험 쓰기(칸 P2x — 화면 묶음 없음, P2와 함께 켤 때만, 261123 시험 보강): 켜면 시험 화면이 보기만에서 빠지고 저장 층(appsave tests · exams · grades)으로 노션에 씀 */
+  const EXW = gOn.has("P2") && gOn.has("P2x"); window.LIVE_EXW = EXW;
+  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "schools"].filter((s) => !(EVW && s === "events") && !(MKW && s === "makeup") && !(EXW && s === "exams"))); /* P3 수업은 걸음 1 = 보기만 */
   window.liveRO = (s) => RO.has(s);
   window.liveScr = (t) => (t && t.screen === "timetable" && t.state && t.state.view === "lesson" ? "lesson" : t ? t.screen : "");
   let roBase = null, roScreen = null, roBusy = false;
@@ -69,12 +71,12 @@ window.liveModeFor = function (search, hostname, protocol) {
   const roCss = document.createElement("style");
   roCss.textContent = ".live-ro #view [data-gdel]{display:none!important}.ro-note{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#FFF6DA;color:#3A3226;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ro-note a{color:inherit;font-weight:600;text-decoration:underline}.ro-line{margin:-2px 0 8px;padding:0 4px;font-size:12px;color:#8A8378}";
   document.head.appendChild(roCss);
-  /* 보기 전용 화면 안내(261119 대표 "보기 중심인 화면에만 안내, 나머지는 다 사용 가능"): 시험 · 수강료 · 청구서 · 손익 분석 · 법정 서류만 제목 줄 아래 작은 회색 한 줄(토스트 아님 · 닫기 없음).
+  /* 보기 전용 화면 안내(261119 대표 "보기 중심인 화면에만 안내, 나머지는 다 사용 가능"): 수강료 · 청구서 · 손익 분석 · 법정 서류만(시험은 261123 쓰기 칸 P2x로 열림) 제목 줄 아래 작은 회색 한 줄(토스트 아님 · 닫기 없음).
      어느 화면인지는 이 목록 한 곳이 기준 — 목록에 없는 화면(수업 · 일정 · 학생 · 클래스 · 등록 …)에는 보기만 칸이어도 안 뜬다 */
-  const RO_NOTE_SCREENS = new Set(["exams", "tuition", "bill", "bookfees", "charges", "etcs", "profit", "costs", "legal", "schools", "records", "reports", "completion", "letters", "files", "alims"]);
+  const RO_NOTE_SCREENS = new Set(["tuition", "bill", "bookfees", "charges", "etcs", "profit", "costs", "legal", "schools", "records", "reports", "completion", "letters", "files", "alims"]);
   const RO_NOTE_TEXT = "이 화면은 보기만 해요 — 고칠 것은 노션에서 고쳐요";
   /* 261119 대표("라이브러리 [+] · [연필]이 막혀 있다"): [+] · [연필]이 꺼진 화면은 이유를 한 줄로 — 라이브러리 · 학교는 노션 버튼이 서버 동작(교재 단원 · 학교 코드)까지 해서 앱에서 직접 추가하지 않음 */
-  const RO_NOTE_BY = { schools: "학교는 보기만 해요 — 학교 추가는 노션 학교 페이지의 [학교 검색]에서 해요(학교 코드까지 가져와요)" };
+  const RO_FIN_NOTE = "결제 · 청구는 이 화면의 단추로 노션에 써요 — 그 밖은 노션에서 고쳐요"; const RO_NOTE_BY = { tuition: RO_FIN_NOTE, bill: RO_FIN_NOTE, profit: RO_FIN_NOTE, schools: "학교 추가 · 학교 코드는 [학교 검색]으로 해요 — 이름 · 기간은 노션에서 고쳐요" };
   const roNote = (show, scr) => {
     const v = document.getElementById("view"); if (!v) return;
     let n = v.querySelector(":scope > .ro-line");
@@ -87,7 +89,7 @@ window.liveModeFor = function (search, hostname, protocol) {
   };
   const roDress = () => {
     const q = (s) => document.querySelectorAll(s), why = "이 화면은 보기만 해요 — 고칠 것은 노션에서 고쳐요";
-    q("#addRow,#tbEd,[data-act2]").forEach((b) => { b.disabled = true; b.title = why; });
+    q("#addRow,#tbEd,[data-act2]:not([data-act2=aFind]):not([data-act2=aCal])").forEach((b) => { b.disabled = true; b.title = why; });
     const recFree = (el) => recTab() && el.closest(REC_AREA); /* 학습기록 쓰기 칸이 켜진 하루 수업 페이지의 기록 탭은 잠그지 않음 */
     q(".panel input:not([type=checkbox]):not([type=radio]),.panel textarea").forEach((i) => { if (!recFree(i) && !(attw() && i.closest(".asfree"))) i.readOnly = true; });
     q(".panel select,.panel input[type=checkbox],.panel input[type=radio]").forEach((i) => { if (!recFree(i)) i.disabled = true; });
@@ -138,17 +140,26 @@ window.liveModeFor = function (search, hostname, protocol) {
   /* 0단계 — 입력 화면(P1)에서 잠그는 것(두 길로 갈라지는 일): 노션 버튼이 딸린 일까지 하는 단추는 끄고 [노션에서 해요]로 알린다.
      등록 [종료 처리] · [링크 재발급], 진도 [교재 생성] · [수료], 안내 전송 · 접수 안내 · 학사일정, 시간표 [잠금 해제](수업이 만들어진 시간표의 요일 · 시간),
      학생 [개인정보 동의](체크하면 노션 자동화가 접수 안내 알림톡을 보낸다 — 앱은 그 칸을 보내지 않는다). 저장 층(appsave.js appsOff)도 같은 것을 보내지 않는다. */
-  const P1_DENY = "[data-act=end],[data-act=enReissue],[data-act=genPg],[data-act=genPg1],[data-act=pgDone],[data-act=pgRep],[data-pgdo],[data-cetone],#bfM,#pLock"; /* [data-cetone] = 클래스 창 [한 번 청구] — 청구서는 노션 [기타경비 청구](서버)가 만듦, 앱엔 저장 길 없음 */
-  const P1_DENY_TEXT = /(접수 안내|등록 안내|안내 전송|안내문 전송|재발급|학사일정 가져오기|종료 처리|교재 생성|교재비에 담기|한 번 청구)\s*\d*\s*$/; /* 담기 = 노션 [담기](서버가 청구서까지 만듦) */
-  const P1_WHY = "";
-  const p1Denied = (el) => { const hf = el && el.closest && el.closest(".hf"); if (hf && hf.closest("#view")) { const lb = hf.querySelector(".hf-lbl"); if (lb && /^개인정보 동의/.test(lb.textContent.trim())) return el.closest(".qhelp,[data-help]") ? null : hf; } const b = el && el.closest && el.closest("button,[role=button],.btn,.lnk,label,.swf,[data-hf]"); if (!b || !b.closest("#view")) return null; if (b.matches(P1_DENY) || b.closest(P1_DENY)) return b; const t = (b.textContent || "").trim(); if (b.matches("button,.btn,.lnk") && P1_DENY_TEXT.test(t)) return b; if (/개인정보 동의/.test(t) && t.length < 40) return b; return null; };
+  /* 261123(과제 막힌단추): 노션 버튼과 같은 칸(`요청` · 자동화 상태 칸)을 바꾸는 단추는 livereq.js가 연다(window.LQ_OPEN — 아래 목록보다 먼저 통과).
+     남은 것 = 서버 저장 길이 그 DB에 쓰지 못하거나 노션 버튼이 다른 DB까지 고치는 것: 수료 보고서 [보내기](보고서 DB) · 시간표 [잠금 해제].
+     등록 [종료 처리]는 261123(과제 종료처리) 서버 reg-end-cleanup이 수업 단계까지 하게 되어 livereq.js가 연다. */
+  const P1_DENY = "[data-pgdo^='send|'],[data-cetone],#pLock"; /* [data-cetone] = 클래스 [한 번 청구](노션 [기타경비 청구]) — 재무 구조 정리 뒤(담당 P0 261123) */
+  const P1_DENY_TEXT = /(접수 안내|등록 안내|안내 전송|안내문 전송|재발급|학사일정 가져오기|종료 처리|교재 생성|교재비에 담기|한 번 청구)\s*\d*\s*$/; /* 담기 = 노션 [담기](서버가 청구서까지 만듦). 이 글자의 단추라도 LQ_OPEN이면 열림 */
+  /* 꺼진 까닭(마우스를 올리면 · 누르면 한 줄 — 사용성 시험 261123: [종료 처리]가 왜 꺼졌는지 화면에서 알 수 없었음) */
+  const P1_WHY = "노션에서 해요 — 창 위 [노션 열기]로 그 페이지를 열어요";
+  const p1Why = (el) => el.matches("[data-pgdo^='send|']") ? "수료 보고서 보내기는 [학습 보고서] 화면 · 노션 발송함에서 해요"
+    : /교재비에 담기/.test(el.textContent || "") ? "교재비 담기는 노션 청구서 [담기]로 해요 — 앱 재무 화면이 열리면 거기서"
+    : el.matches("[data-cetone]") ? "한 번 청구는 노션 클래스 [기타경비 청구]로 해요 — 재무 화면을 정리한 뒤 앱에서 열려요"
+    : /안내 전송|안내문 전송/.test(el.textContent || "") ? "이 안내는 노션에서 담당자가 직접 보내요 — 창 위 [노션 열기]"
+    : P1_WHY;
+  const p1Denied = (el) => { const hf = el && el.closest && el.closest(".hf"); if (hf && hf.closest("#view") && !window.LQ_OPEN) { const lb = hf.querySelector(".hf-lbl"); if (lb && /^개인정보 동의/.test(lb.textContent.trim())) return el.closest(".qhelp,[data-help]") ? null : hf; } /* 개인정보 동의는 livereq.js가 확인 창 → 노션 체크(자동화가 접수 안내) */ const b = el && el.closest && el.closest("button,[role=button],.btn,.lnk,label,.swf,[data-hf]"); if (!b || !b.closest("#view")) return null; if (window.LQ_OPEN && b.matches(window.LQ_OPEN)) return null; if (b.matches(P1_DENY) || b.closest(P1_DENY)) return b; const t = (b.textContent || "").trim(); if (b.matches("button,.btn,.lnk") && P1_DENY_TEXT.test(t)) return b; if (/개인정보 동의/.test(t) && t.length < 40 && !window.LQ_OPEN) return b; return null; };
   const p1Dress = () => {
     if (!(window.LIVE && window.LIVE.loaded) || document.body.classList.contains("live-ro")) return;
-    document.querySelectorAll("#view button,#view .lnk,#view .swf,#view [data-hf],#view .hf").forEach((el) => { if (p1Denied(el) !== el) return; if ("disabled" in el) el.disabled = true; el.setAttribute("aria-disabled", "true"); el.title = /개인정보 동의/.test(el.textContent) ? "개인정보 동의는 노션에서 체크해요 — 체크하면 접수 안내 알림톡이 나가요" : P1_WHY; el.classList.add("live-off"); });
+    document.querySelectorAll("#view button,#view .lnk,#view .swf,#view [data-hf],#view .hf").forEach((el) => { if (p1Denied(el) !== el) return; if ("disabled" in el) el.disabled = true; el.setAttribute("aria-disabled", "true"); el.title = /개인정보 동의/.test(el.textContent) ? "개인정보 동의는 노션에서 체크해요 — 체크하면 접수 안내 알림톡이 나가요" : p1Why(el); el.classList.add("live-off"); });
   };
   /* 꺼진 것은 꺼진 모양으로(원본 검수 H3): 실제 자료 모드에서 잠근 단추 · 칸은 글자까지 흐리게 */
   roCss.textContent += ".live-off,.live-ro #view button[aria-disabled=true],.live-ro #view .hf-box[aria-disabled=true]{opacity:.45!important;filter:grayscale(1);cursor:not-allowed!important}";
-  const p1Block = (e) => { if (!(window.LIVE && window.LIVE.loaded) || document.body.classList.contains("live-ro")) return; const b = p1Denied(e.target); if (!b) return; if (e.type === "keydown" && !["Enter", " "].includes(e.key)) return; e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); if (e.type === "click" && /개인정보 동의/.test(b.textContent)) say("개인정보 동의는 노션에서 체크해요 — 체크하면 접수 안내 알림톡이 나가요"); };
+  const p1Block = (e) => { if (!(window.LIVE && window.LIVE.loaded) || document.body.classList.contains("live-ro")) return; const b = p1Denied(e.target); if (!b) return; if (e.type === "keydown" && !["Enter", " "].includes(e.key)) return; e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); if (e.type === "click") say(/개인정보 동의/.test(b.textContent) ? "개인정보 동의는 노션에서 체크해요 — 체크하면 접수 안내 알림톡이 나가요" : p1Why(b)); };
   ["click", "mousedown", "pointerdown", "keydown", "change"].forEach((ev) => document.addEventListener(ev, p1Block, true));
   /* 수업이 만들어진 시간표의 요일 · 시간 · 명단, 이미 있는 등록의 종료일은 그 자리에서 되돌린다(끌어 옮기기 · 명단 넣기처럼 단추가 아닌 길까지) */
   const p1Guard = () => {
@@ -162,8 +173,8 @@ window.liveModeFor = function (search, hostname, protocol) {
     const fresh = (DB.schools || []).filter((s) => !isId(s.id));
     /* 학교 칸은 비우지 않고 불러온 값으로 되돌린다. 되돌린 뒤 불러온 값과 같아진 학생은 '작성 중'에서 뺀다 */
     const schBack = (s) => { const b0 = LIVE_STU0.has(s.id) ? JSON.parse(LIVE_STU0.get(s.id)) : null; s.school = s._o && "school" in s._o ? s._o.school || "" : b0 ? b0.school || "" : ""; if (b0) { const canon = (o) => JSON.stringify(Object.keys(o).filter((k) => k !== "_o" && k !== "state" && o[k] !== undefined).sort().map((k) => [k, o[k]])); if (canon(s) === canon(b0)) { if ("state" in b0) s.state = b0.state; else delete s.state; delete s._o; } } };
-    if (fresh.length) { const gone = new Set(fresh.map((s) => s.name)); DB.schools = DB.schools.filter((s) => isId(s.id)); (DB.students || []).forEach((s) => { if (gone.has(s.school)) schBack(s); }); hit = hit || "학교는 노션 [학교 검색]으로 먼저 넣어요 — 학교 코드 · 학사일정이 함께 들어가요"; }
-    else { const have = new Set((DB.schools || []).map((s) => s.name)); (DB.students || []).forEach((s) => { if (s.school && !have.has(s.school) && s.state === "draft") { schBack(s); if (s.school && !have.has(s.school)) s.school = ""; hit = hit || "없는 학교예요 — 학교는 노션 [학교 검색]으로 먼저 넣어요"; } }); }
+    if (fresh.length) { const gone = new Set(fresh.map((s) => s.name)); DB.schools = DB.schools.filter((s) => isId(s.id)); (DB.students || []).forEach((s) => { if (gone.has(s.school)) schBack(s); }); hit = hit || "학교는 [학교 › 학교 검색]으로 먼저 넣어요 — 학교 코드 · 학사일정이 함께 들어가요"; }
+    else { const have = new Set((DB.schools || []).map((s) => s.name)); (DB.students || []).forEach((s) => { if (s.school && !have.has(s.school) && s.state === "draft") { schBack(s); if (s.school && !have.has(s.school)) s.school = ""; hit = hit || "없는 학교예요 — 학교는 [학교 › 학교 검색]으로 먼저 넣어요"; } }); }
     if (hit) { try { savedSync(); lastSnap = snapshot(); } catch (_) {} r0(); if (hit.trim()) say(hit); }
   };
   /* 칸을 고친 바로 뒤에도 본다(다시 그리지 않는 길 — 원본 검수 H2: 종료일이 저장 전까지 고친 값으로 보였음) */
@@ -186,8 +197,8 @@ window.liveModeFor = function (search, hostname, protocol) {
   /* 허용 목록(보기 화면에서 눌러도 되는 것 = 값이 바뀌지 않는 것). 여기 없는 단추 · 고르기 · 입력은 보기 화면에서 꺼지고 막힌다.
      창: 링크 · 도움말 · 노션 · 줄 열기/이동 · 접기 · 탭 · 할 일 줄. 위 줄: 날짜 · 달 · 주 이동, 보기 탭, 찾기, 엑셀 · 인쇄, 크기, 창 고정,
      그리고 입력 칸(P1)에서 고친 것을 다루는 실행 취소 · 다시 실행 · 모두 되돌리기 · 저장. */
-  const RO_PASS0 = "a,[data-web],[data-asmv],#asBack,#syncBtn,[data-ft],#wdB,#cfZo,#cfZi,#mkFilT,[data-help],[data-notion],.hnot,[data-drill],[data-go],[data-gobook],[data-gochs],[data-gobill],[data-act^=go],[data-rpdo^=open],[data-rpdo^=notion],[data-pgfold],[data-entab],[data-ldn],[data-lmn],.ptabs,.ro-note,.tdr,.tdmore,.qhelp,summary,"
-    + "[data-dn],[data-mn],[data-sub],[data-cfnav],[data-mtab],[data-view],[data-wkd],[data-evsel],.foldchip,#lq,.sbx,#xlB,#prB,#undoB,#redoB,#rvAll,#saveAll,#panelT,#mkPanelT,#seaChip,#wkP,#wkN,#wkT,#lmAtt,#cbFind,#zOut,#zIn,#makeWeek,#lGen"; /* #makeWeek · #lGen(수업 메뉴 v559의 생성 단추) = 수업 생성: 노션 버튼과 같은 서버 함수(generate-classes)를 부르는 run이라 보기 화면에서도 켠다(대표 261117 "수업 생성은 앱에서도") */
+  const RO_PASS0 = "a,[data-fin],[data-web],[data-asmv],#asBack,#syncBtn,[data-ft],#wdB,#cfZo,#cfZi,#mkFilT,[data-help],[data-notion],.hnot,[data-drill],[data-go],[data-gobook],[data-gochs],[data-gobill],[data-act^=go],[data-rpdo^=open],[data-rpdo^=notion],[data-pgfold],[data-entab],[data-ldn],[data-lmn],.ptabs,.ro-note,.tdr,.tdmore,.qhelp,summary,"
+    + "[data-dn],[data-mn],[data-sub],[data-cfnav],[data-mtab],[data-view],[data-wkd],[data-evsel],.foldchip,#lq,.sbx,#xlB,#prB,#undoB,#redoB,#rvAll,#saveAll,#panelT,#mkPanelT,#seaChip,#wkP,#wkN,#wkT,#lmAtt,#cbFind,#zOut,#zIn,#makeWeek,#lGen,[data-act2=aFind],[data-act2=aCal]"; /* [data-act2=aFind] · [aCal] = 학교 [학교 검색] · [학사일정 가져오기](261123 — 서버 school-api · sync-school-calendar를 앱에서 부름, liveschool.js). */ /* #makeWeek · #lGen(수업 메뉴 v559의 생성 단추) = 수업 생성: 노션 버튼과 같은 서버 함수(generate-classes)를 부르는 run이라 보기 화면에서도 켠다(대표 261117 "수업 생성은 앱에서도") */
   const RO_HIT = "button,input,select,textarea,label,[role],[tabindex],[contenteditable],.btn,.lnk,.hf-box";
   const roBlock = (e) => {
     if (!document.body.classList.contains("live-ro") || !e.target.closest) return;
@@ -231,6 +242,12 @@ window.liveModeFor = function (search, hostname, protocol) {
       banner("노션 자료를 받는 중이에요 — 받기 전에는 저장할 수 없어요");
       try {
         /* 보기 칸(P2)이 켜져 있으면 보기 묶음(일정 · 보고서 · 수강료 · 청구 · 시험 · 알림톡 설정 · 자료)도 함께 받는다 */
+        /* (강사계정 261123) 누가 로그인했나 — 강사면 메뉴를 거르고(liveteacher.js), 그 메뉴 화면이 읽는 DB만 받는다(서버도 거절). 옛 서버(me 모름)면 원장으로 본다 */
+        let me = null;
+        try { me = await liveApi({ url: cfg.url, anonKey: cfg.anonKey, session }, { action: "me" }); } catch (e) { if (/\((401|403)/.test(e.message) || /인증 실패/.test(e.message)) throw new Error("로그인이 필요해요 (401)"); }
+        if (typeof window.liveRoleApply === "function") window.liveRoleApply(me);
+        /* 강사가 읽을 DB = 서버 표(_shared/teacherAccess.ts MENU_DBS)에서 계산한 readDbs — 앱에 따로 적지 않는다. 그 밖 DB는 부르지 않는다(서버도 403) */
+        window.LIVE_READ_DBS = me && me.role === "teacher" ? new Set(Array.isArray(me.readDbs) ? me.readDbs : []) : null;
         await (P2ON && typeof appViewLoad === "function" ? appViewLoad : appLoad)({ url: cfg.url, anonKey: cfg.anonKey, session });
         appSaveMark(DB); /* 불러온 값을 기준으로 적어 둠 — 저장 때 달라진 칸만 보냄 */
         try { liveStuMark(); } catch (_) {} /* 학생 되돌리기 기준 */
@@ -253,13 +270,19 @@ window.liveModeFor = function (search, hostname, protocol) {
         else stop("노션 자료를 불러오지 못했어요(" + e.message + ")");
       } finally { document.body.classList.remove("live-loading"); }
     };
-    const ask = () => modal(`<h2>관리자 로그인</h2><div class="box"><p class="hint">노션 자료를 읽으려면 관리자 비밀번호를 넣어요.</p><input id="lvpw" type="password" autocomplete="current-password" aria-label="관리자 비밀번호"><p class="hint" id="lverr"></p></div><div class="actions"><span class="sp"></span><button class="btn" id="cc">예시 자료로 보기</button><button class="btn pri" id="co">로그인</button></div>`, (m, close) => {
+    const ask = () => modal(`<h2>관리자 로그인</h2><div class="box"><p class="hint">노션 자료를 읽으려면 관리자(원장) 비밀번호를 넣어요. 선생님은 아래 [강사 로그인]으로 들어와요.</p><input id="lvpw" type="password" autocomplete="current-password" aria-label="관리자 비밀번호"><p class="hint" id="lverr"></p></div><div class="actions"><button class="btn" id="lvtc">강사 로그인</button><span class="sp"></span><button class="btn" id="cc">예시 자료로 보기</button><button class="btn pri" id="co">로그인</button></div>`, (m, close) => {
       const pw = m.querySelector("#lvpw"), err = m.querySelector("#lverr");
+      /* (강사계정 261123) 강사는 휴대폰 번호 · 자기 비밀번호로(liveteacher.js). 원장 로그인은 그대로 */
+      m.querySelector("#lvtc").onclick = () => { pw.value = ""; close(); window.liveTeacherAsk(cfg, (s) => { session = s; HadaAdminAuth.saveSession(s); go(); }, ask); };
       m.querySelector("#cc").onclick = () => { location.href = location.pathname + "?demo=1"; }; /* 예시 자료 = 실제 자료 모드를 벗어난 주소(배포 사이트는 매개변수 없이 열면 실제 자료라 ?demo=1을 붙인다) */
       const submit = async () => {
         err.textContent = "";
         try { session = await HadaAdminAuth.login(cfg.url, pw.value); HadaAdminAuth.saveSession(session); close(); go(); }
-        catch (e) { err.textContent = e.message; pw.select(); }
+        catch (e) {
+          /* 첫 설치(261123): 초기 비밀번호는 서버가 설정용(scope "settings") 로그인만 받는다 — 옛 관리자 설정 웹 화면 대신 여기서 바로 새 비밀번호를 정한다 */
+          if (/초기 비밀번호/.test(e.message || "")) { const first = pw.value; pw.value = ""; close(); liveFirstPassword(cfg, first, (s) => { session = s; HadaAdminAuth.saveSession(s); go(); }, ask); return; }
+          err.textContent = e.message; pw.select();
+        }
       };
       m.querySelector("#co").onclick = submit;
       pw.onkeydown = (e) => { if (e.key === "Enter") submit(); };
@@ -271,6 +294,63 @@ window.liveModeFor = function (search, hostname, protocol) {
   setTimeout(start, 0);
 })();
 
+/* 첫 설치 초기 비밀번호 바꾸기(261123, 옛 관리자 설정 웹 화면에서 옮김): 초기 비밀번호로 설정용 세션(scope "settings")을 받아 change → 새 비밀번호로 다시 로그인.
+   비밀번호 값은 보낸 바로 뒤 지우고 어디에도 적지 않는다. 서버 동작(admin-security login · change)은 그대로.
+   (261123 대표 "0000 비밀번호로 예시데이터 비우기 / 한번 진행하고 나면 막히도록") 설치하는 하다랩이 비밀번호를 바꾸지 않고 예시 데이터를 먼저 비우는 길:
+   창을 열면 설정용 세션(setup)을 한 번 받아 비우기 상태를 읽는다 → 시작할 수 있으면 [예시 데이터 비우기…](liveadmin.js liveInitialClear, 관리자 설정과 같은 창),
+   끝났으면 "비웠어요 — 잠겼어요" 한 줄, 이미 쓰던 학원(locked) · 서버가 이 길을 모름 · 연결 실패면 아무것도 안 보인다(비밀번호 정하기만).
+   [취소]는 그 세션을 로그아웃해 0000 세션이 남지 않게 한다. 0000 세션으로 할 수 있는 일은 서버가 비우기 · 비밀번호 바꾸기로만 막는다 */
+function liveFirstPassword(cfg, first, done, back, setup) {
+  const call = async (body, key) => {
+    const res = await fetch(String(cfg.url).replace(/\/+$/, "") + "/functions/v1/admin-security", { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "x-admin-key": key } : {}) }, body: JSON.stringify(body), cache: "no-store" });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(out.error || "관리자 로그인 서버에 연결하지 못했어요");
+    return out;
+  };
+  const getSetup = async () => setup || (setup = (await call({ action: "login", password: first, scope: "settings" })).session);
+  modal(`<h2>새 관리자 비밀번호 정하기</h2><div class="box"><p class="hint">처음 설치한 초기 비밀번호예요. 새 비밀번호를 정하면 이 앱 · 키오스크 · 법정 서류 · 수업 관리에서 그 비밀번호로 로그인해요.</p><div class="lv-setup" id="lvclr" hidden><div class="lv-setup-t">설치하는 중이면 — 예시 데이터 먼저 비우기</div><p class="hint" id="lvclrst"></p><p class="hint" id="lvclrhelp">비밀번호를 정하지 않고 비울 수 있어요. 한 번 끝나면 잠겨 다시 비울 수 없어요. 비운 뒤 이 창을 닫으면 0000 그대로 넘길 수 있어요.</p><button class="btn danger" id="lvclrgo" type="button">예시 데이터 비우기…</button></div><label class="lab" for="lvnp1">새 비밀번호</label><input class="inp" id="lvnp1" type="password" autocomplete="new-password" minlength="8" maxlength="128"><p class="hint">앞뒤 공백 없이 8~128자. 0000은 쓸 수 없어요.</p><label class="lab" for="lvnp2">새 비밀번호 확인</label><input class="inp" id="lvnp2" type="password" autocomplete="new-password" minlength="8" maxlength="128"><p class="hint" id="lvnerr"></p></div><div class="actions"><span class="sp"></span><button class="btn" id="cc">취소</button><button class="btn pri" id="co">비밀번호 정하기</button></div>`, (m, close) => {
+    const a = m.querySelector("#lvnp1"), b = m.querySelector("#lvnp2"), err = m.querySelector("#lvnerr"), ok = m.querySelector("#co");
+    const box = m.querySelector("#lvclr"), go = m.querySelector("#lvclrgo");
+    const wipe = () => { a.value = ""; b.value = ""; };
+    const cancel = () => { wipe(); const s = setup; first = ""; setup = ""; close(); if (s) call({ action: "logout" }, s).catch(() => {}); back(); };
+    m.querySelector("#cc").onclick = cancel;
+    m.onclick = (e) => { if (e.target === m) cancel(); }; /* 바깥을 눌러도 [취소]와 같이 — 0000 상태로 앱 화면에 남지 않고 로그인 창으로 */
+    /* 예시 데이터 비우기 상태(설치 길). liveadmin.js가 없거나 실패하면 그대로 숨김 */
+    (async () => {
+      if (!window.liveInitialClear) return;
+      let st = null; try { st = await window.liveInitialClear.state({ url: cfg.url, session: await getSetup() }); } catch (_) { st = null; }
+      if (!st || !box.isConnected) return;
+      const [line, canStart, tone] = st;
+      if (!canStart && tone !== "g") return; /* 이미 쓰던 학원(locked): 보이지 않는다 */
+      m.querySelector("#lvclrst").textContent = line;
+      m.querySelector("#lvclrhelp").hidden = !canStart; go.hidden = !canStart; box.hidden = false;
+    })();
+    go.onclick = async () => {
+      go.disabled = true;
+      try {
+        const s = await getSetup(), keep = first;
+        window.liveInitialClear.open({ url: cfg.url, session: s }, () => liveFirstPassword(cfg, keep, done, back, s));
+      } catch (e) { err.textContent = e.message; go.disabled = false; }
+    };
+    const submit = async () => {
+      err.textContent = "";
+      const nw = a.value;
+      if (!nw) return (err.textContent = "새 비밀번호를 넣어요");
+      if (nw !== b.value) return (err.textContent = "새 비밀번호와 확인 값이 달라요");
+      ok.disabled = true;
+      try {
+        const s1 = await getSetup();
+        try { await call({ action: "change", current_password: first, new_password: nw }, s1); }
+        catch (e) { if (!/로그인/.test(e.message || "")) throw e; setup = ""; await call({ action: "change", current_password: first, new_password: nw }, await getSetup()); } /* 설정용 세션이 12시간 지나 풀렸으면 한 번 다시 받는다 */
+        const s2 = await HadaAdminAuth.login(cfg.url, nw);
+        wipe(); first = ""; setup = ""; close(); toast("새 비밀번호로 바꿨어요"); done(s2);
+      } catch (e) { err.textContent = e.message; } finally { ok.disabled = false; }
+    };
+    ok.onclick = submit;
+    [a, b].forEach((i) => { i.onkeydown = (e) => { if (e.key === "Enter") submit(); }; });
+    setTimeout(() => a.focus(), 0);
+  });
+}
 /* 실제 자료 모드의 [저장]: 작성 중인 줄(입력 범위 12개 묶음)을 app-api save로 노션에 쓴다. 저장 창의 [저장]이 부른다(LIVE일 때만).
    성공한 줄은 저장됨으로, 실패 · 충돌 줄은 작성 중으로 남기고 이유를 보여 준다. 지우기는 보내지 않는다(노션에서 직접). */
 async function liveApi(conn, body) {
@@ -309,7 +389,7 @@ function liveHooks() {
   /* 노션 선택지로 바꾼 목록에는 앱에서 새 값을 만들지 않는다(노션에서 선택지를 먼저 만든다) */
   optAdd = (k, t) => {
     if (window.LIVE && window.LIVE_OPTS_PENDING) { toast0("노션 선택지를 불러오는 중이에요 — 잠시 뒤 다시 만들어요"); return null; }
-    if (window.LIVE && window.LIVE_OPTS && window.LIVE_OPTS[k]) { toast0(`'${String(t || "").trim()}'은(는) 노션 [${window.LIVE_OPTS[k]}] 선택지에 없어요 — 노션에서 선택지를 먼저 만들어요`); return null; }
+    if (window.LIVE && window.LIVE_OPTS && window.LIVE_OPTS[k]) { toast0(`'${String(t || "").trim()}'은(는) 노션 [${window.LIVE_OPTS[k]}] 선택지에 없어요 — ${k === "series" ? "라이브러리 [시리즈 관리]에서 먼저 만들어요" : "노션에서 선택지를 먼저 만들어요"}`); return null; }
     return optAdd0(k, t);
   };
   const pending = () => { try { return appSaveCollect(DB).changes.length; } catch (_) { return 0; } };
@@ -328,15 +408,15 @@ function liveHooks() {
     toast0(m);
   };
   /* [동기화] 버튼(261119 대표 "느려도 정확하게"): 우측 상단 [저장] 옆. render 뒤마다 붙이고, 마지막 동기화 시각은 서버 status의 syncedAt으로 */
-  try { const render0 = render; render = function () { const o = render0.apply(this, arguments); try { liveSyncMount(); } catch (_) {} return o; }; } catch (_) {}
+  try { const render0 = render; render = function () { const o = render0.apply(this, arguments); try { liveSyncMount(); } catch (_) {} try { if (window.liveTeacherMount) window.liveTeacherMount(); } catch (_) {} return o; }; } catch (_) {}
   setTimeout(() => { try { liveSyncStatus(); } catch (_) {} }, 3000);
   /* 메뉴 [N] 주소를 미리 받아 둔다(누를 때 새 탭이 팝업으로 막히지 않게) — 못 받아도 누를 때 다시 시도 */
   setTimeout(() => { try { liveMenuPages().catch(() => {}); } catch (_) {} }, 2500);
   /* 라이브러리(교재) 입력(261119 대표): [+] = 새 교재 등록 창(서버 textbook-api register-custom — 교재 + 단원목록을 노션에), 줄·표 편집은 저장의 update. 프로그램은 노션에서 */
   try {
-    bookFindOpen = () => liveBookRegisterOpen("교재");
-    LISTS.books_b.add = LISTS.books.add = () => liveBookRegisterOpen("교재"); /* 261120 대표: [교재] 탭 [+] = 구분 교재로 채워 열림(창 첫 칸에서 바꿀 수 있음). [프로그램] 탭 [+]은 서버가 프로그램 등록 동작을 알려 주면 liveBookRegisterOpen("프로그램")으로 연결 */
-    LISTS.books_b.addLabel = "교재 등록";
+    /* 261123 대표 "모든걸 앱에서": [교재] 탭 [+] = 책 찾기(검색 · 교보문고 · 직접 등록), 단원 고치기 · 시리즈 관리 — livebook.js(옛 라이브러리 웹 화면에서 옮김) */
+    if (typeof liveBookHooks === "function") liveBookHooks();
+    else { bookFindOpen = () => liveBookRegisterOpen("교재"); LISTS.books_b.add = LISTS.books.add = () => liveBookRegisterOpen("교재"); LISTS.books_b.addLabel = "교재 등록"; }
     LISTS.books_p.add = () => liveBookRegisterOpen("프로그램"); /* 261120 서버 #530: register-custom kind:"프로그램"(ISBN · 단원 없이 가능, 가격 = 재료비, 분량 = 총 차시) */
     LISTS.books_p.addLabel = "프로그램 등록"; LISTS.books_p.blank = null;
   } catch (_) {}
@@ -388,7 +468,8 @@ function liveBookRegisterOpen(kind0, keep) {
         if (F.publisher) body.publisher = F.publisher;
         await liveBookApi(body);
         close();
-        if (dirtyCount() === 0 && typeof window.liveReload === "function") { await window.liveReload(); toast(nm + (pg ? "을" : "를") + " 등록했어요 — 과목은 줄을 눌러 넣어요"); }
+        if (typeof lbAfterAdd === "function") await lbAfterAdd(nm + (pg ? "을" : "를") + " 등록했어요 — 과목은 줄을 눌러 넣어요"); /* 라이브러리 사본을 맞춘 뒤 다시 받음(livebook.js) */
+        else if (dirtyCount() === 0 && typeof window.liveReload === "function") { await window.liveReload(); toast(nm + (pg ? "을" : "를") + " 등록했어요 — 과목은 줄을 눌러 넣어요"); }
         else toast(nm + (pg ? "을" : "를") + " 등록했어요 — 저장하지 않은 변경이 있어서 목록은 저장하고 새로고침하면 보여요");
       } catch (e) {
         ok.textContent = nm + " 등록"; upd();
@@ -411,7 +492,8 @@ function liveSaveRow(L, r) {
     toast("삭제했어요 — 저장 전에 만든 줄이라 노션에는 없었어요");
     return null;
   }
-  const only = (coll, row) => row === r || (L.coll === "students" && coll === "enrolls" && row.studentId === r.id);
+  const only = (coll, row) => row === r || (L.coll === "students" && coll === "enrolls" && row.studentId === r.id)
+    || (L.coll === "exams" && ((coll === "tests" && row.id === r.testId) || (coll === "grades" && row.examId === r.id))); /* 시험정보 창 [시험 저장] = 새로 고른 시험(학원) 줄 + 이 시험의 성적 줄까지(261123 원본 대조 — 새 시험 줄이 빠져 연결이 다음 저장으로 밀렸음) */
   return liveSave({ only }).then((res) => { try { if (res && res.deleted && activeTab.state.sel === r.id && !(DB[L.coll] || []).includes(r)) { activeTab.state.sel = null; render(); } } catch (_) {} return res; });
 }
 /* ═════ [동기화](노션 → 서버 사본, 261119) — 서버 app-api { action:"run", name:"sync-copy", dbs, full:true }(노션에서 지운 줄까지 통째로 대조, 느려도 됨).
@@ -434,10 +516,12 @@ function liveSyncMount() {
   if (!sa || !on) { if (b) b.remove(); if (t) t.remove(); return; }
   if (b && b.parentElement !== sa.parentElement) { b.remove(); if (t) t.remove(); b = t = null; }
   if (!b) {
+    document.querySelectorAll("#syncAt").forEach((x) => x.remove());
     sa.insertAdjacentHTML("beforebegin", `<span class="sync-at" id="syncAt"></span><button type="button" class="btn tb-sync ${window._liveSyncing ? "busy" : ""}" id="syncBtn" ${window._liveSyncing ? "disabled" : ""} title="동기화 — 노션에서 바뀐 것 · 지운 줄까지 이 화면의 자료를 통째로 맞춰요(오래 걸릴 수 있어요). 저장과는 달라요: 노션 → 앱 방향이에요">${IC("rotc", "s")}<span>${window._liveSyncing ? "맞추는 중…" : "동기화"}</span></button>`);
     b = document.getElementById("syncBtn"); t = document.getElementById("syncAt"); b.onclick = liveSyncRun;
   }
-  if (t) { const txt = window.LIVE_SYNCED_AT ? `마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)}` : ""; if (t.textContent !== txt || !t.dataset.f) { t.textContent = txt; t.dataset.f = "1"; try { if (typeof fitBars === "function") fitBars(); } catch (_) {} } } /* 단추 · 시각이 붙은 뒤 위 줄이 맞는지 다시 잰다 */
+  { const tr = document.querySelector("#view > .top.pg-ttl"); if (t && tr && t.parentElement !== tr) tr.appendChild(t); } /* 261123 대표: 자동 갱신 줄은 단추 줄이 아니라 제목 줄 오른쪽 끝(단추 묶음 바로 위) */
+  if (t) { const auto = typeof window.lrSyncText === "function" ? window.lrSyncText() : null; if (b) b.title = b.title.replace(/ \(마지막 동기화 [^)]*\)$/, "") + (auto && window.LIVE_SYNCED_AT ? ` (마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)})` : ""); const txt = auto || (window.LIVE_SYNCED_AT ? `마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)}` : ""); if (t.textContent !== txt || !t.dataset.f) { t.textContent = txt; t.dataset.f = "1"; try { if (typeof fitBars === "function") fitBars(); } catch (_) {} } } /* 단추 · 시각이 붙은 뒤 위 줄이 맞는지 다시 잰다 */
 }
 /* 시스템 타이틀 = 노션 최상위 페이지 제목(서버 status.rootTitle). 사이드바 제목 · 탭 제목 앞부분에 쓰고, 없으면 지금 글자 그대로. */
 function liveRootTitle(t) {
@@ -504,19 +588,20 @@ async function liveSave(opts) { /* opts.only(coll,row) = 이 줄만 저장(창 [
   try {
     if (window.LIVE_OPTS_PENDING && window.LIVE_OPTS_PROMISE) { toast("노션 선택지를 불러온 뒤에 저장해요"); await window.LIVE_OPTS_PROMISE; } /* 선택지에 없는 값을 거르려면 선택지가 먼저 필요(저장 층이 읽음) */
     /* 수업 출결(작성 중인 수업)이 있으면 먼저 수업 관리 서버로 보낸다(출결 쓰기 칸이 켜져 있을 때) */
-    let lessons = 0;
+    /* (261123 출시 전 1번) 수업 저장이 실패한 것(lfails)은 아래 앱 저장이 "저장할 변경이 없어요" · "저장했어요"로 덮지 않고, 그 수업 작성 중 표시(LDIRTY)도 지우지 않는다 */
+    let lessons = 0; const lfails = [], keepL = new Set();
     if (!opts.only && (window.LIVE_ATTW || window.LIVE_RECW) && typeof liveLessonSave === "function") {
       /* 작성 중인 수업 = 수업 창 표시(LDIRTY) + 학습기록 쓰기 칸이면 작성 중 기록이 있는 수업(Z1) — 실제 수업(LIVE_LS)만 */
       const ks = new Set([...LDIRTY.keys()].filter((k) => !k.startsWith("mk:")));
       if (window.LIVE_RECW) (DB.recs || []).forEach((r) => { if (r.state === "draft" && !r.del && r.key && typeof LIVE_LS !== "undefined" && LIVE_LS[r.key]) ks.add(r.key); });
       if (window.LIVE_RECW && typeof liveRoutineDirtyKeys === "function") liveRoutineDirtyKeys().forEach((k) => ks.add(k)); /* 루틴 체크만 바뀐 수업 */
-      for (const k of ks) { if (await liveLessonSave(k)) lessons++; }
+      for (const k of ks) { if (await liveLessonSave(k)) lessons++; else if (liveLessonSave.failed) { keepL.add(k); lfails.push(...(liveLessonSave.fails || [])); } }
     }
     /* 보강(칸 P3m): 만들기 · 배정 · 빼기 · 지우기를 서버 보강 동작으로 */
-    if (!opts.only && window.LIVE_MKW && typeof liveMakeupSave === "function") lessons += await liveMakeupSave();
+    if (!opts.only && window.LIVE_MKW && typeof liveMakeupSave === "function") { lessons += await liveMakeupSave(); if (liveMakeupSave.failed) lfails.push(...(liveMakeupSave.fails || [])); }
     let pend = 0; try { pend = appSaveCollect(DB, opts.only).changes.length; } catch (_) {}
-    if (lessons && !pend) return { ok: 0, failed: [], lessons };
-    return await liveSaveRun(opts);
+    if ((lessons || lfails.length) && !pend) return { ok: 0, failed: [], lessons, lessonFailed: lfails };
+    return await liveSaveRun(Object.assign({}, opts, { keepL, lessonFails: lfails }));
   } finally { window._liveSaving = false; }
 }
 async function liveSaveRun(opts) {
@@ -534,7 +619,7 @@ async function liveSaveRun(opts) {
   try { (typeof tabs !== "undefined" ? tabs : []).forEach((t) => fix(t.state)); if (typeof activeTab !== "undefined" && activeTab) fix(activeTab.state); } catch (_) {}
   DB.blocks.forEach((b) => { delete b.t0; delete b.regs0; delete b.ending; delete b.addFrom; delete b.moveN; try { tSnap(b); } catch (_) {} });
   try { UNLOCKED.clear(); ORIG.clear(); } catch (_) {}
-  if (!res.failed.length) { try { LDIRTY.clear(); } catch (_) {} }
+  if (!res.failed.length) { try { const keep = (opts && opts.keepL) || new Set(); [...LDIRTY.keys()].forEach((k) => { if (!keep.has(k)) LDIRTY.delete(k); }); } catch (_) {} }
   /* 저장 뒤 실행 취소로 옛 id가 되살아나지 않게 되돌리기 기록을 비운다 */
   try { undoStack.length = 0; if (typeof redoStack !== "undefined") redoStack.length = 0; lastSnap = snapshot(); } catch (_) {}
   try { if (window.liveSelBack) window.liveSelBack(); } catch (_) {}
@@ -542,11 +627,12 @@ async function liveSaveRun(opts) {
   const warn = (res.warn || []).length;
   /* 저장 버튼 규칙(대표 261119): 서버 반영이 끝난 뒤 숫자를 줄이고, 실패한 줄은 이유와 함께 숫자에 남긴다. 바뀐 것이 없으면 "저장할 변경이 없어요" */
   let left = 0; try { left = dirtyCount(); } catch (_) {}
-  if (!res.failed.length && !warn) {
+  const lf = (opts && opts.lessonFails) || [];
+  if (!res.failed.length && !warn && !lf.length) {
     if (!res.ok && !res.sent) { say("저장할 변경이 없어요"); return res; }
     say(`저장했어요 · ${res.ok}줄${res.deleted ? ` (삭제 ${res.deleted}줄 포함)` : ""}${opts && opts.only && left ? ` · 저장할 것 ${left}개 남음(위 [저장])` : ""}`); return res;
   }
   const li = (a) => a.map((f) => `<li><b>${esc2(f.name || f.coll || "")}</b> — ${esc2(f.conflict ? "그사이 노션에서 바뀌었어요. 새로 고친 뒤 다시 저장해요" : f.error || f.msg || f)}</li>`).join("");
-  modal(`<h2>저장 결과</h2><div class="box"><p>노션에 저장 ${res.ok}줄${res.failed.length ? ` · 저장 안 됨 ${res.failed.length}줄(작성 중으로 남겼어요)` : ""}</p>${res.failed.length ? `<ul>${li(res.failed)}</ul>` : ""}${warn ? `<p class="hint">확인할 것 ${warn}건</p><ul>${li((res.warn || []).map((w) => (typeof w === "string" ? { error: w } : w)))}</ul>` : ""}</div><div class="actions"><span class="sp"></span><button class="btn pri" id="co">확인</button></div>`, (m, close) => { m.querySelector("#co").onclick = close; });
+  modal(`<h2>저장 결과</h2><div class="box"><p>노션에 저장 ${res.ok}줄${res.failed.length ? ` · 저장 안 됨 ${res.failed.length}줄(작성 중으로 남겼어요)` : ""}</p>${res.failed.length ? `<ul>${li(res.failed)}</ul>` : ""}${lf.length ? `<p>수업 저장 안 됨 ${lf.length}건(작성 중으로 남겼어요)</p><ul>${lf.map((t) => `<li>${esc2(t)}</li>`).join("")}</ul>` : ""}${warn ? `<p class="hint">확인할 것 ${warn}건</p><ul>${li((res.warn || []).map((w) => (typeof w === "string" ? { error: w } : w)))}</ul>` : ""}</div><div class="actions"><span class="sp"></span><button class="btn pri" id="co">확인</button></div>`, (m, close) => { m.querySelector("#co").onclick = close; });
   return res;
 }
