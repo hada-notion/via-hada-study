@@ -1,6 +1,7 @@
 /* 앱 보기 층(P2 보기 1:1): appdata.js 뒤에 불러, 아직 비어 있던 묶음(일정·보고서·가정통신문·수강료·청구서·청구 항목·비용·시험·성적·알림톡 설정·기타경비·자료)을 노션 복사본에서 읽어 채운다(읽기만). 칸 대응 표는 MAPPING-P2.md */
 
 // ---------- 보조 ----------
+const APPV_td = (v) => String(v || "").replace(/^[^가-힣]+/, "").trim();
 const APPV_DB = {
 	enroll: "등록(학원) DB", cls: "클래스(학원) DB", stu: "학생(학원) DB", lib: "라이브러리(학원) DB",
 	event: "일정(학원) DB", box: "알림톡 발송함(학원) DB", report: "보고서(학원) DB", letter: "가정통신문(학원) DB",
@@ -11,8 +12,6 @@ const APPV_DB = {
 // appLoad가 더 받아야 할 DB(appdata.js APPMAP의 DB는 빼고)
 const APPV_DBS = [APPV_DB.event, APPV_DB.box, APPV_DB.report, APPV_DB.letter, APPV_DB.tuition, APPV_DB.pay, APPV_DB.bill, APPV_DB.line, APPV_DB.billPay, APPV_DB.etc, APPV_DB.exam, APPV_DB.examInfo, APPV_DB.grade, APPV_DB.alim, APPV_DB.file]
 const APPV_ETC6 = ["모의고사비", "재료비", "피복비", "급식비", "기숙사비", "차량비"]
-// 일정 진행상태: 노션(시작 전·진행 중·미완료·완료) → 시제품(예정·진행 중·완료). 미완료는 시제품에 없는 값이라 그대로 둔다
-const APPV_EV_STAT = { "시작 전": "예정", "진행 중": "진행 중", "완료": "완료", "미완료": "미완료" }
 const APPV_REPORT_KINDS = { "주간 보고서": "주간", "월간 보고서": "월간", "수료 보고서": "수료" }
 // 알림톡 받는 사람: 노션 옵션 → 시제품 고르기 값
 const APPV_TARGET = { "우선 연락 대상": "우선 연락처" }
@@ -90,7 +89,9 @@ const APPVIEW = {
 				schools: X.ids(p["학교"]), grades: X.ids(p["학년"]).map((id) => X.title("학년(학원) DB", id, "이름")).filter(Boolean), students: X.ids(p["학생"]),
 				// 날짜 시작~끝 = 노션 값 그대로(끝이 없으면 "")
 				start, end, who: X.id1(p["담당자"]),
-				stat: APPV_EV_STAT[p["진행상태"]] || X.str(p["진행상태"]) || "예정", pub: !!p["학부모 공개"], memo: X.str(p["일정 안내 메모"]),
+				// 할 일 두 칸(261124 대표): 달성여부(달성 · 미달성, 비면 진행) · 우선순위(중요 · 보류, 비면 보통) · 태그(매일). 앱은 읽기만 — 바꾸기는 노션 홈 보드
+				ach: APPV_td(X.str(p["달성여부"])), pri: APPV_td(X.str(p["우선순위"])), /* 노션 선택지 "✔️ 달성" · "‼️ 중요"처럼 앞에 아이콘이 붙음 — 글자만 떼어 앱 안에서는 달성 · 미달성 · 중요 · 보류로 */ tags: Array.isArray(p["태그"]) ? p["태그"].map(String) : [],
+				pub: !!p["학부모 공개"], memo: X.str(p["일정 안내 메모"]),
 				classIds: X.ids(p["클래스"]), school: X.title("학교(학원) DB", X.id1(p["학교"]), "이름"), state: "saved",
 				_time: X.dt(p["날짜"]).length > 10 ? X.dt(p["날짜"]).slice(11) : "", _students: X.ids(p["학생"]), _neis: !!X.str(p["NEIS 동기화키"]),
 			}

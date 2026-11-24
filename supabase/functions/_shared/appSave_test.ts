@@ -171,7 +171,7 @@ Deno.test("출시 전 5번: 사본 쓰기만 실패해도 새 id와 함께 성�
 
 // ---------- 일정(학원) DB(2.8): 앱이 쓰는 칸만, 잠긴 줄 날짜 거절, 리포트 맞추기 ----------
 const EV = "일정(학원) DB"
-Deno.test("일정: 받는 칸 10개만(잠금 칸 버림), 그 밖 칸은 거절", () => {
+Deno.test("일정: 받는 칸 12개만(잠금 칸 버림), 그 밖 칸은 거절", () => {
   checkAllowedProps(EV, { 이름: "x", 날짜: { start: "2026-04-27", end: "2026-04-30" }, "세부 구분": "시험", "기록(내부용)": "", 숨김: false, "학부모 공개": true, 클래스: [], 학생: [], 학교: [], 학년: [] })
   for (const p of [{ 메모: "x" }, { "NEIS 동기화키": "k" }, { 수업공제일명: "x" }, { "원본 행사내용": "x" }, { 잠금: true }]) assertThrows(() => checkAllowedProps(EV, p), SaveError)
   checkAllowedProps("학생(학원) DB", { 메모: "x" }) // 다른 DB는 그대로
@@ -206,6 +206,29 @@ Deno.test("일정(2.8 2단계): 세부 구분·기록(내부용) 받고 구분�
   checkAllowedProps(EV, { "세부 구분": "상담", "기록(내부용)": "메모" })
   assertThrows(() => checkAllowedProps(EV, { 구분: "📆 학원 일정" }), SaveError)
   assertEquals([eventAffectsReport(EV, { "기록(내부용)": "x" }), eventAffectsReport(EV, { "세부 구분": "상담" })], [false, true])
+})
+
+Deno.test("일정(홈 할 일 261124): 진행상태·담당자 받고, 그것만 바꾸면 리포트 맞추기 안 함", () => {
+  checkAllowedProps(EV, { 진행상태: "완료", 담당자: [] })
+  checkAllowedProps(EV, { 완료: "완료" }) // 칸 이름을 "완료"로 바꾼 뒤
+  assertEquals(eventAffectsReport(EV, { 완료: "완료" }), false)
+  assertEquals([eventAffectsReport(EV, { 진행상태: "완료" }), eventAffectsReport(EV, { 담당자: [] }), eventAffectsReport(EV, { 진행상태: "완료", 날짜: "2026-05-01" })], [false, false, true])
+})
+
+Deno.test("칸 이름 바꾼 뒤(261124): 옛 이름 진행상태로 와도 새 이름 완료로 쓰고, 옛 이름이 있는 DB는 그대로", () => {
+  const sch = { 완료: { type: "status" } } as never
+  assertEquals(toNotionProps({ 진행상태: "완료" }, sch), { 완료: { status: { name: "완료" } } })
+  assertEquals(toNotionProps({ 진행상태: "완료" }, { 진행상태: { type: "status" } } as never), { 진행상태: { status: { name: "완료" } } })
+})
+
+Deno.test("일정 할 일 두 칸(261124): 달성여부 · 우선순위 받고 리포트 맞추기 안 함, 아이콘 붙은 선택지로 맞춤", () => {
+  checkAllowedProps(EV, { 달성여부: "달성", 우선순위: "" })
+  assertEquals([eventAffectsReport(EV, { 달성여부: "달성" }), eventAffectsReport(EV, { 우선순위: "중요" })], [false, false])
+  const sch = { 달성여부: { type: "select", options: ["✔️ 달성", "✖️ 미달성"] }, 우선순위: { type: "select", options: ["‼️ 중요", "💤 보류"] } } as never
+  assertEquals(toNotionProps({ 달성여부: "미달성", 우선순위: "중요" }, sch), { 달성여부: { select: { name: "✖️ 미달성" } }, 우선순위: { select: { name: "‼️ 중요" } } })
+  assertEquals(toNotionProps({ 달성여부: "", 우선순위: "" }, sch), { 달성여부: { select: null }, 우선순위: { select: null } })
+  assertEquals(toNotionProps({ 달성여부: "달성" }, { 달성여부: { type: "select", options: ["달성", "미달성"] } } as never), { 달성여부: { select: { name: "달성" } } })
+  assertThrows(() => toNotionProps({ 달성여부: "보통" }, sch), SaveError)
 })
 
 // ---------- 라이브러리(교재) 입력: 새 교재는 textbook-api, 고치기는 save + 라이브러리 복사본 맞추기 ----------

@@ -101,12 +101,13 @@
     note: (rows) => (rows.length ? `${rows.length}줄 · ${WON(rows.reduce((a, x) => a + (+x.amount || 0), 0))}` : "다 냈어요"),
     cols: [["이름", (x) => `${stuName(x.studentId)} · ${x.name || x.item || ""}`], ["등록", (x) => clsName(x.classId)], ["청구 월", (x) => x.month || "—"], ["종류", (x) => x.kind], ["교재비 금액", (x) => WON(x.amount)], ["결제금액", () => "—"], ["결제", (x) => btn("cpay", x.id, "결제")]],
   });
-  /* 결제 내역 — 결제 DB 이번 달, 구분 필터. [＋ 결제 줄]로 지출 · 청구서 결제 매출을 넣는다 */
+  /* 결제 내역 — 결제 DB 이번 달, 구분 필터. 새 줄 넣기(finAct.pnew)는 코드만 두고 화면 단추는 뺌(대표 261124 "나중에 + 활성화") */
   LISTS.profit_c = base(C, {
     title: "결제 · 손익", noAdd: 0, rows: () => (isLive() && Array.isArray(DB.pays) ? DB.pays.filter((x) => !x.del) : payRows()), byMonth: (x) => (typeof mKey === "function" ? mKey(x.date) : String(x.date).slice(0, 7).replace("-", ".")), roRow: (r) => !!r._der,
-    help: "그 달 결제 기록이에요(노션 결제(학원) DB). [＋ 결제 줄]로 지출(임대료 · 교재 구입)이나 청구서 결제를 매출로 옮겨 넣고, 줄을 눌러 결제일 · 수단 · 금액 · 비고를 고쳐요. 수강료 [결제]로 생긴 줄은 수강료 칸에서 고쳐요.",
+    help: "그 달 결제 기록이에요(노션 결제(학원) DB). 새 결제 줄(지출 · 청구서 결제 합계)은 노션 결제 DB에서 넣고, 줄을 눌러 결제일 · 수단 · 금액 · 비고를 고쳐요. 수강료 [결제]로 생긴 줄은 수강료 칸에서 고쳐요.",
     cols: [["결제일", (x) => D10(x.date), "date"], ["결제", (x) => x.name, "name"], ["구분", (x) => (x.kind === "지출" ? pill("red", "지출") : pill("blue", "매출")), "kind"], ["결제 수단", (x) => x.how || "—", "how"], ["결제 금액", (x) => WON(x.amount), "amount"], ["비고", (x) => x.memo || "—", "memo"], ["결제 줄 고치기", (x) => (isLive() && !x._der ? btn("pedit", x.id, "고치기") : "")]],
-    ftabs: [["지출", "지출", (x) => x.kind === "지출"], ["매출", "매출", (x) => x.kind === "매출"]], note: (rows) => `매출 ${WON(rows.filter((x) => x.kind === "매출").reduce((a, x) => a + x.amount, 0))} · 지출 ${WON(rows.filter((x) => x.kind === "지출").reduce((a, x) => a + x.amount, 0))}`,
+    ftabs: [["지출", "지출", (x) => x.kind === "지출"], ["매출", "매출", (x) => x.kind === "매출"]], /* 머리 합계 = 그 달 전체(261124 통합 검수: [지출] 탭에서 "매출 0원"으로 보이던 것 — 필터 탭과 상관없이) */
+    note: () => { const L = LISTS.profit_c, m = (activeTab && activeTab.state && activeTab.state.month) || thisM(), all = L.rows().filter((x) => L.byMonth(x) === m), sum = (k) => WON(all.filter((x) => x.kind === k).reduce((a, x) => a + (+x.amount || 0), 0)); return `매출 ${sum("매출")} · 지출 ${sum("지출")}`; },
     fields: C.fields, blank: () => ({ id: uid("co"), name: "새 결제", kind: "지출", date: TODAY, how: "카드", amount: 0, memo: "" }),
   });
   /* 청구서 결제 — 청구 결제 DB, 고른 달 결제일. 합계 줄(이 합계를 결제 내역에 매출 한 줄로 옮긴다) */
@@ -118,28 +119,40 @@
     note: (rows) => `합계 ${WON(rows.reduce((a, x) => a + (+x.amount || 0), 0))} · ${rows.length}건`,
     cols: [["이름", (x) => x._n || `${stuName(x.studentId)} · ${x.name || x.item || ""}`], ["결제상태", () => "🟢결제 완료"], ["결제일", (x) => D10(x.paidOn)], ["교재", (x) => x.name || x.item || "—"], ["결제 방법", (x) => x.how || "—"], ["결제 금액", (x) => WON(x.amount)], ["결제 줄 고치기", (x) => (isLive() && x._n !== undefined ? btn("bpedit", x.id, "고치기") : "")]],
   });
-  /* 그래프 = 한 탭, 칩 [손익 | 매출 | 지출 | 모두](대표 261123 — 노션은 보기 3개 그대로, 앱만 칩 한 탭). 결제 DB 월별 선 그래프 + 고른 칩에 맞춘 달별 표 */
+  /* 그래프 = 한 탭, 칩 [손익 | 매출 | 지출 | 모두](대표 261123 — 노션은 보기 3개 그대로, 앱만 칩 한 탭). 결제 DB 월별 선 그래프만(대표 261124 "그래프에는 그래프만" — 달별 표 없앰, 숫자는 [결제 내역]) */
   const SER = { p: { name: "손익", tone: "green", pick: (r) => r.net }, s: { name: "매출", tone: "blue", pick: (r) => r.tu + r.ot }, x: { name: "지출", tone: "red", pick: (r) => r.out } };
   const GM = [["p", "손익"], ["s", "매출"], ["x", "지출"], ["a", "모두"]];
-  const chart = (series, labels, title) => {
-    const all = series.flatMap((s) => s.vals), W = 760, H = 210, L = 64, R = 16, Tp = 16, Bt = 30, n = labels.length, hi = Math.max(0, ...all), lo = Math.min(0, ...all), span = hi - lo || 1;
-    const y = (v) => Tp + (1 - (v - lo) / span) * (H - Tp - Bt), x = (i) => L + (n > 1 ? i * (W - L - R) / (n - 1) : 0);
-    const fm = (v) => (Math.abs(v) >= 10000 ? Math.round(v / 10000).toLocaleString("ko-KR") + "만" : String(Math.round(v)));
-    const grid = [0, 1, 2, 3].map((k) => { const v = lo + span * k / 3; return `<line x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}" class="fcg"/><text x="${L - 8}" y="${y(v) + 4}" class="fct" text-anchor="end">${fm(v)}</text>`; }).join("");
-    const zero = lo < 0 ? `<line x1="${L}" y1="${y(0)}" x2="${W - R}" y2="${y(0)}" class="fcz"/>` : "";
-    const lines = series.map((s) => `<polyline points="${s.vals.map((v, i) => `${x(i)},${y(v)}`).join(" ")}" class="fcl t-${s.tone}"/>` + s.vals.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" class="fcd t-${s.tone}"><title>${labels[i]} ${s.name} ${WON(v)}</title></circle>`).join("")).join("");
-    const xl = labels.map((l, i) => (n <= 13 || i % 2 === 0 ? `<text x="${x(i)}" y="${H - 8}" class="fct" text-anchor="middle">${mm(l)}월</text>` : "")).join("");
-    const lg = series.length > 1 ? `<span class="fcleg">${series.map((s) => `<i class="t-${s.tone}"></i>${s.name}`).join("")}</span>` : "";
-    return `<div class="finchart"><div class="fch"><b>${title}</b><small>월별 · 결제 금액 합계</small>${lg}</div><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="${title} 월별 그래프">${grid}${zero}${lines}${xl}</svg></div>`;
+  /* 그래프 범위(대표 261124 "0에서 평평하다 한 달만 솟음"): 자료가 있는 첫 달부터 지금 달까지 — 3달보다 짧으면 3달, 12달보다 길면 최근 12달.
+     자료 없는 달은 0으로 찍지 않는다(점 · 선 없음) */
+  const gRange = () => { const all = monthRows(); const f = all.findIndex((r) => r.any); const from = f < 0 ? all.length - 3 : Math.min(f, all.length - 3); return all.slice(Math.max(0, from, all.length - 12)); };
+  /* 눈금 = 1 · 2 · 5 × 10^k 로 떨어지는 둥근 값(20만 · 13만 · 7만 같은 어중간한 칸 없게) */
+  const niceStep = (v) => { const p = Math.pow(10, Math.floor(Math.log10(v || 1))), f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; };
+  /* 그래프 폭 = 화면 본문 폭에 맞춘 실제 픽셀(늘이고 줄이지 않아 글자 크기가 늘 같다) */
+  const gWidth = (side) => { const v = document.getElementById("view"); const w = (v && v.clientWidth) || 1000; return Math.max(420, Math.min(1000, w - 2 * 16 /* 둘레 */ - 2 * 16 - 2 /* 그래프 상자 */ - 16 /* 스크롤 칸 */ - side)); };
+  const chart = (series, labels, title, W, has) => {
+    const all = series.flatMap((s) => s.vals.filter((v, i) => has[i])), H = 240, L = 56, R = 72 /* 마지막 점 오른쪽 금액 글 자리 */, Tp = 14, Bt = 30, n = labels.length;
+    const st0 = niceStep((Math.max(0, ...all) - Math.min(0, ...all)) / 4 || 10000), hi = Math.ceil(Math.max(0, ...all) / st0) * st0 || st0, lo = Math.floor(Math.min(0, ...all) / st0) * st0, span = hi - lo || 1;
+    const y = (v) => Tp + (1 - (v - lo) / span) * (H - Tp - Bt), x = (i) => L + 12 + (n > 1 ? i * (W - L - R - 24) / (n - 1) : (W - L - R - 24) / 2);
+    const fm = (v) => (v === 0 ? "0" : Math.abs(v) >= 10000 ? (v / 10000).toLocaleString("ko-KR", { maximumFractionDigits: 1 }) + "만" : v.toLocaleString("ko-KR"));
+    const ticks = []; for (let v = lo; v <= hi + 1e-6; v += st0) ticks.push(v);
+    const grid = ticks.map((v) => `<line x1="${L}" y1="${y(v)}" x2="${W - R}" y2="${y(v)}" class="${v === 0 ? "fcz" : "fcg"}"/><text x="${L - 8}" y="${y(v) + 4}" class="fct" text-anchor="end">${fm(v)}</text>`).join("");
+    const segs = (s) => { const out = []; let cur = []; s.vals.forEach((v, i) => { if (has[i]) cur.push(`${x(i)},${y(v)}`); else { if (cur.length) out.push(cur); cur = []; } }); if (cur.length) out.push(cur); return out; };
+    const lines = series.map((s) => segs(s).filter((g) => g.length > 1).map((g) => `<polyline points="${g.join(" ")}" class="fcl t-${s.tone}"/>`).join("") + s.vals.map((v, i) => !has[i] ? "" : `<circle cx="${x(i)}" cy="${y(v)}" r="4" class="fcd t-${s.tone}"><title>${labels[i]} ${s.name} ${WON(v)}</title></circle>`).join("")).join("");
+    const xl = labels.map((l, i) => `<text x="${x(i)}" y="${H - 8}" class="fct" text-anchor="middle">${i === 0 || mm(l) === 1 ? String(l).slice(2, 4) + "년 " : ""}${mm(l)}월</text>`).join("");
+    /* 자료 있는 마지막 달 값은 점 옆에 글로(달이 적어도 읽히게) (점 오른쪽) — 줄이 여럿이면 겹치지 않게 14px씩 띄움 */
+    const last = has.lastIndexOf(true), tags = last < 0 ? "" : series.map((s) => ({ s, v: s.vals[last] })).sort((a, b) => b.v - a.v).map(({ s, v }, k, arr) => { let ty = y(v) + 4; if (k > 0) ty = Math.max(ty, arr._py + 14); arr._py = ty; return `<text x="${x(last) + 9}" y="${ty}" class="fct fcv t-${s.tone}" text-anchor="start">${fm(v)}</text>`; }).join("");
+    const lg = series.length > 1 ? `<span class="fcleg">${series.map((s) => `<span><i class="t-${s.tone}"></i>${s.name}</span>`).join("")}</span>` : "";
+    return `<div class="finchart"><div class="fch"><b>${title}</b><small>월별 · 결제 금액 합계</small>${lg}</div><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${title} 월별 그래프">${grid}${lines}${tags}${xl}</svg></div>`;
   };
   LISTS.profit_g = base(P, {
-    title: "결제 · 손익", cal: true, coll: "profit", ro: true, rows: () => [], fields: [], help: "결제(학원) DB를 달마다 모아 선 그래프로 봐요. 칩으로 손익 · 매출 · 지출을 고르고, [모두]는 세 줄을 겹쳐 봐요(노션은 보기 셋, 앱은 칩 한 탭 — 결과는 같아요). 숫자는 [결제 내역]에서 고쳐요.",
+    title: "결제 · 손익", cal: true, noEmpty: true, coll: "profit", ro: true, rows: () => [], fields: [], help: "결제(학원) DB를 달마다 모아 선 그래프로 봐요. 자료가 있는 첫 달부터 지금 달까지(적어도 3달, 많아야 12달) 보여요 — 자료 없는 달은 점을 찍지 않아요. 칩으로 손익 · 매출 · 지출을 고르고, [모두]는 세 줄을 겹쳐 봐요(노션은 보기 셋, 앱은 칩 한 탭 — 결과는 같아요). 숫자는 [결제 내역]에서 고쳐요.",
     calFn: (Lx, st) => {
-      const gm = (st && st.gm) || "p", keys = gm === "a" ? ["s", "x", "p"] : [gm], rs = monthRows().slice(-12), labels = rs.map((r) => r.m);
+      const gm = (st && st.gm) || "p", keys = gm === "a" ? ["s", "x", "p"] : [gm], rs = gRange(), labels = rs.map((r) => r.m);
       const chips = `<div class="vseg subseg finchips" role="group" aria-label="그래프 고르기">${GM.map(([k, t]) => `<button type="button" data-fin="gmode" data-id="${k}" class="${gm === k ? "on" : ""}" aria-pressed="${gm === k}">${t}</button>`).join("")}</div>`;
-      const th = keys.map((k) => `<th class="n">${SER[k].name}</th>`).join(""), tr = rs.slice().reverse().map((r) => `<tr><td>${r.m}</td>${keys.map((k) => `<td class="n">${r.any ? WON(SER[k].pick(r)) : "—"}</td>`).join("")}</tr>`).join("");
-      const title = gm === "a" ? "손익 · 매출 · 지출" : SER[gm].name;
-      return `<div class="finwrap">${chips}${chart(keys.map((k) => ({ name: SER[k].name, tone: SER[k].tone, vals: rs.map(SER[k].pick) })), labels, title)}<table class="t finsum"><thead><tr><th>달</th>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
+      const title = gm === "a" ? "손익 · 매출 · 지출" : SER[gm].name, ser = keys.map((k) => ({ name: SER[k].name, tone: SER[k].tone, vals: rs.map(SER[k].pick) })), has = rs.map((r) => !!r.any);
+      /* 그래프가 본문 폭을 다 씀(옛 오른쪽 달별 표 자리까지) */
+      const W = gWidth(0);
+      return `<div class="finwrap">${chips}${chart(ser, labels, title, W, has)}</div>`;
     },
   });
 
@@ -148,13 +161,20 @@
     if (typeof window.finRun === "function") { try { return window.finRun(kind, ctx, close); } catch (e) { toast(String(e.message || e)); return; } }
     close(); toast("노션에 쓰는 연결은 다음 단계에서 켜요 — 지금은 확인 창까지만 보여요");
   };
-  const dlg = (title, rows, note, okLabel, kind, ctx) => modal(`<h2>${title}</h2><div class="box">${rows.map(([k, v]) => `<div class="finrow"><span>${esc(k)}</span><b>${v}</b></div>`).join("")}</div><div class="note finnote">${note}</div><div class="actions"><span class="sp"></span><button class="btn" id="fnC">취소</button><button class="btn pri" id="fnO">${okLabel}</button></div>`, (m, close) => { m.querySelector("#fnC").onclick = close; m.querySelector("#fnO").onclick = () => run(kind, ctx, close); });
+  const dlg = (title, rows, note, okLabel, kind, ctx) => modal(`<h2>${title}</h2><div class="box">${rows.map(([k, v]) => `<div class="finrow"><span>${esc(k)}</span><b>${v}</b></div>`).join("")}</div><div class="note finnote">${note}</div><div class="actions"><span class="sp"></span><button class="btn" id="fnC">취소</button><button class="btn pri" id="fnO">${okLabel}</button></div>`, (m, close) => { m.querySelector("#fnC").onclick = close; const ok = m.querySelector("#fnO"); ok.onclick = () => {
+    /* 261124 앱 클릭 점검: 노션에 쓰는 동안(결제 기록은 10초 넘게 걸리기도) 단추가 그대로라 눌렸는지 모름 → 끝날 때까지 "노션에 쓰는 중…"으로 잠금 */
+    if (ok.disabled) return; ok.disabled = true; ok.textContent = "노션에 쓰는 중…";
+    const back = () => { if (ok.isConnected) { ok.disabled = false; ok.textContent = okLabel; } };
+    try { Promise.resolve(run(kind, ctx, close)).then(back, back); } catch (e) { back(); throw e; }
+  }; });
+  /* 클래스에 붙은 기타경비: 실제 자료는 클래스 쪽 `기타경비`(etcIds), 예시 자료는 기타경비 쪽 classIds — 둘 다 센다(261124 점검: 실제 자료에서 늘 0개로 보였음) */
+  const etcOf = (c) => { const ids = new Set(c.etcIds || []); return alive(DB.etcs).filter((e) => ids.has(e.id) || (e.classIds || []).includes(c.id)); };
   const act = {
     gen: (c) => { const n = enrolled(c).length, k = alive(DB.tuition).filter((t) => t.classId === c.id && t.month === nextM()).length; dlg(`월 수강료 생성 — ${esc(c.name)}`, [["수강료 기간", `${nextM()} <small>(비우면 다음 달)</small>`], ["해당월 수강료 생성 내역", `${mm(nextM())}월 ${k}/${n}`], ["월간 수업 총량", c.qty ? `${c.qty} ${esc(c.unit || "")}` : "비어 있음"]], "수강 중인 등록마다 수강료 줄을 노션에 만들어요. 안내문은 보내지 않아요. 월간 수업 총량이 비어 있으면 만들지 않아요.", "월 수강료 생성", "tuition-create", { classId: c.id }); },
     pay: (t) => { const amt = safe(() => tuFee(t), 0), etc = etcSum(t); dlg("결제", [["수강료", esc(tuName(t))], ["청구금액", WON(amt)], ["매달 기타경비 금액", etc ? WON(etc) : "—"], ["결제 기록 금액", WON(amt + etc)]], "노션 결제 기록 한 줄을 만들고 이 수강료에 이어요. 실제 결제나 알림톡은 하지 않아요. 일부만 받았으면 만든 뒤 결제 내역에서 금액을 고쳐요.", "결제 기록 만들기", "tuition-pay", { tuitionId: t.id }); },
     cpay: (x) => dlg("청구서 결제", [["청구 줄", esc(`${stuName(x.studentId)} · ${x.name || x.item || ""}`)], ["금액", WON(x.amount)]], "청구 결제에 결제 한 줄을 남겨요. 실제 결제나 알림톡은 하지 않아요.", "결제 기록 만들기", "charge-pay", { chargeId: x.id }),
     bill: (c) => { const es = enrolled(c), miss = es.filter((e) => !alive(DB.bookfees).some((b) => b.studentId === e.studentId && b.classId === c.id)).length; dlg(`교재비 생성 — ${esc(c.name)}`, [["수강 중 등록", es.length + "명"], ["청구서 없는 학생", miss + "명"]], "수강 중인 등록 가운데 청구서가 없는 학생마다 한 장씩 만들어요. 교재를 배부하지는 않고, 안내문도 보내지 않아요.", "교재비 생성", "bill-create", { classId: c.id }); },
-    etc: (c) => dlg(`기타경비 청구 — ${esc(c.name)}`, [["수강 중 등록", enrolled(c).length + "명"], ["붙은 기타경비", alive(DB.etcs).filter((e) => (e.classIds || []).includes(c.id)).length + "개"]], "한 번 받기로 한 기타경비를 학생마다 청구서로 만들어요. 같은 달 · 같은 기타경비는 다시 눌러도 두 번 만들어지지 않아요. 안내문은 보내지 않아요.", "기타경비 청구", "etc-charge", { classId: c.id }),
+    etc: (c) => dlg(`기타경비 청구 — ${esc(c.name)}`, [["수강 중 등록", enrolled(c).length + "명"], ["붙은 기타경비", etcOf(c).length + "개"]], "한 번 받기로 한 기타경비를 학생마다 청구서로 만들어요. 같은 달 · 같은 기타경비는 다시 눌러도 두 번 만들어지지 않아요. 안내문은 보내지 않아요.", "기타경비 청구", "etc-charge", { classId: c.id }),
   };
   document.addEventListener("click", (e) => {
     const b = e.target.closest && e.target.closest("[data-fin]"); if (!b || b.disabled) return;

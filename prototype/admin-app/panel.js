@@ -88,18 +88,76 @@
   // 6. 줄 목록: 이름 ……… 정보 · 꼬리표 ›
   //   줄 = {attr(누를 때 쓸 속성 글자, 예: data-gobook="id"), title(툴팁), cls(덧붙는 클래스), check{attr,on}(체크 줄), lead(앞 그림 HTML), dot(색), t(이름), sub(정보 글) | subHtml, tag(꼬리표), trail(뒤 알약 HTML), arrow(false = 이동 없음)}
   //   empty = 빈 목록 안내 글 · opt = {ro(보기만 하는 목록), emptyRow(빈 목록도 목록 틀 안의 한 줄로)}
+  const ROW_STACK = 28;
   function rows(rs, empty, opt) {
     opt = opt || {};
     const arrow = typeof IC === "function" ? IC("right", "s") : IC_.rightc;
-    if (!rs.length) return opt.emptyRow ? `<div class="ttrows${opt.ro ? " ro" : ""}"><div class="ttrow ro"><span class="t none">${esc(empty || "없음")}</span></div></div>` : `<div class="hint">${esc(empty || "아직 없어요")}</div>`;
-    return `<div class="ttrows${opt.ro ? " ro" : ""}">${rs.map(r => { const tag = r.check ? "label" : "div"; return `<${tag} class="ttrow${r.cls ? " " + esc(r.cls) : ""}"${r.attr ? " " + r.attr : r.go ? ` data-go="${esc(r.go)}"` : ""}${r.title ? ` title="${esc(r.title)}"` : ""}>${r.check ? `<input type="checkbox" ${r.check.attr || ""} ${r.check.on ? "checked" : ""}>` : ""}${r.lead || ""}${r.dot ? `<i class="cdot" style="background:${esc(r.dot)}"></i>` : ""}<span class="t">${esc(r.t)}</span>${r.subHtml != null ? `<span class="hint">${r.subHtml}</span>` : r.sub != null ? `<span class="hint">${esc(r.sub)}</span>` : ""}${r.tag ? `<span class="tag">${esc(r.tag)}</span>` : ""}${r.trail || ""}${r.arrow === false || r.check ? "" : arrow}</${tag}>`; }).join("")}</div>`;
+    if (!rs.length) return opt.emptyRow ? `<div class="ttrows${opt.ro ? " ro" : ""}"><div class="ttrow ro"><span class="t none">${esc(empty || "없음")}</span></div></div>` : `<div class="hint empty">${esc(empty || "아직 없어요")}</div>`;
+    /* 이름 + 정보 글이 합쳐 길면(ROW_STACK자 넘음) 이름 = 첫 줄 · 정보 = 아래 줄(이름이 세 줄로 꺾이지 않게, 관리앱-기준.md "줄 목록 글") */
+    const subTxt = r => r.subHtml != null ? String(r.subHtml).replace(/<[^>]*>/g, "") : r.sub != null ? String(r.sub) : "";
+    return `<div class="ttrows${opt.ro ? " ro" : ""}">${rs.map(r => { const tag = r.check ? "label" : "div"; const st = !!(r.stack || (subTxt(r) && String(r.t || "").length + subTxt(r).length > ROW_STACK)); return `<${tag} class="ttrow${st ? " stack" : ""}${r.cls ? " " + esc(r.cls) : ""}"${r.attr ? " " + r.attr : r.go ? ` data-go="${esc(r.go)}"` : ""}${r.title ? ` title="${esc(r.title)}"` : ""}>${r.check ? `<input type="checkbox" ${r.check.attr || ""} ${r.check.on ? "checked" : ""}>` : ""}${r.lead || ""}${r.dot ? `<i class="cdot" style="background:${esc(r.dot)}"></i>` : ""}${st ? `<span class="tt2">` : ""}<span class="t">${esc(r.t)}</span>${r.subHtml != null ? `<span class="hint">${r.subHtml}</span>` : r.sub != null ? `<span class="hint">${esc(r.sub)}</span>` : ""}${st ? "</span>" : ""}${r.tag ? `<span class="tag">${esc(r.tag)}</span>` : ""}${r.trail || ""}${r.arrow === false || r.check ? "" : arrow}</${tag}>`; }).join("")}</div>`;
   }
+  // 6-3. 반복 줄 칸(보기 ↔ 편집): 학생마다 · 항목마다 같은 칸이 줄로 반복되는 묶음(시험 성적 등). 기준 관리앱-기준.md 5장 "반복 줄 칸"
+  //   평소 = 정돈된 글(머리줄에 칸 이름 한 번, 숫자 오른쪽 정렬, 빈 값 "—"), 묶음 머리 [ㅇㅇ 편집] → 모든 줄이 입력칸(같은 열 폭) · [취소] [✓ 편집 완료]
+  //   spec = {key(편집 상태 열쇠), label(편집 단추 이름 앞말, 예: "성적"), cols:[{k, label, w(열 폭 px), num(숫자 = 오른쪽 정렬),
+  //            view(row → 보기 글), edit(row → {attr, value, ph, mode(inputmode), items(고르기 목록)}) | 없으면 계산 칸(편집에서도 글)}],
+  //           rows:[{id, data(칸 함수에 넘길 줄 자료), nameHtml, sub(이름 옆 흐린 글 HTML), draft}], nameLabel(첫 열 머리, 기본 "학생"), empty}
+  //   always = 늘 편집 갈래(펼친 기록 카드처럼 열린 것 자체가 편집 상태인 곳 — 편집 단추 없음).
+//   편집 상태는 화면이 아니라 이 부품이 들고 있다(RG). 취소용 사본은 화면이 rgridReg(key, {snap, restore})로 넘긴다.
+  const RG = {}, RGF = {};
+  function rgridOn(key) { return !!RG[key]; }
+  function rgridReg(key, f) { RGF[key] = f; }
+  function rgridHead(key, label, opt) {
+    opt = opt || {}; const ic = (n) => (typeof IC === "function" ? IC(n, "s") : "");
+    if (opt.off) return "";
+    return RG[key] ? `<button type="button" class="lnk" data-rgx="${esc(key)}" title="편집을 시작하기 전 값으로 되돌려요">취소</button><button type="button" class="btn sm pri rgok" data-rgok="${esc(key)}" title="입력칸을 닫아요 — 노션에는 [저장]으로 들어가요">${ic("check")}편집 완료</button>`
+      : `<button type="button" class="btn icon rged" data-rged="${esc(key)}" aria-label="${esc(label)} 편집" title="${esc(label)} 편집 — 칸을 한꺼번에 편집해요">${ic("pen")}</button>`;/* 편집 = 연필 아이콘만(대표 261124 "편집같은거는 아이콘만"), 이름은 마우스를 올리면 */
+  }
+  function rgrid(s) {
+    const ed = !!s.always || !!RG[s.key], cols = s.cols || [];
+    /* 칸 폭 = 최소 폭(c.w) 보장 + 창이 넓어지면 이름 2 : 칸 1로 같이 늘어남(창을 넓혀도 칸이 그대로 좁던 것) */
+    const tpl = `minmax(72px,2fr) ${cols.map(c => `minmax(${c.w || 56}px,1fr)`).join(" ")}`;
+    const cell = (c, r) => {
+      const cls = `rgc${c.num ? " num" : ""}`;
+      if (ed && c.edit) {
+        const e = c.edit(r.data) || {}; const v = e.value == null ? "" : e.value;
+        if (e.items) return `<select class="inp rgi ${cls}" ${e.attr || ""} aria-label="${esc(e.aria || c.label)}"><option value="">${esc(e.ph || c.label)}</option>${e.items.map(o => `<option ${String(o) === String(v) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
+        return `<input class="inp rgi ${cls}" ${e.attr || ""} value="${esc(v)}" placeholder="${esc(e.ph || c.label)}" inputmode="${esc(e.mode || "numeric")}" autocomplete="off" aria-label="${esc(e.aria || c.label)}">`;
+      }
+      const t = c.view ? c.view(r.data) : ""; const none = t == null || t === "";
+      return `<span class="${cls}${none ? " none" : ""}">${none ? "—" : t}</span>`;
+    };
+    if (!(s.rows || []).length) return s.empty ? `<div class="hint">${esc(s.empty)}</div>` : "";
+    return `<div class="rgrid${ed ? " ed" : ""}" data-rgrid="${esc(s.key)}" style="--rgcols:${tpl}"><div class="rgrow rgh"><span class="rgn">${esc(s.nameLabel || "학생")}</span>${cols.map(c => `<span class="rgc${c.num ? " num" : ""}">${esc(ed && c.editLabel ? c.editLabel : c.label)}</span>`).join("")}</div>${s.rows.map(r => `<div class="rgrow${r.draft ? " draft" : ""}"><span class="rgn"><span class="rgnt">${r.nameHtml}</span>${r.sub ? `<small class="rgns">${r.sub}</small>` : ""}</span>${cols.map(c => cell(c, r)).join("")}</div>`).join("")}</div>`;
+  }
+  // 편집 단추 · 완료 · 취소 · Enter(아래 줄 같은 칸으로) — 창 어디서든 한 곳에서 묶음
+  document.addEventListener("click", ev => {
+    const t = ev.target && ev.target.closest ? ev.target.closest("[data-rged],[data-rgok],[data-rgx]") : null; if (!t) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const d = t.dataset, key = d.rged || d.rgok || d.rgx, f = RGF[key] || {};
+    if (d.rged != null) { RG[key] = { snap: f.snap ? f.snap() : null }; }
+    else if (d.rgx != null) { const s = RG[key]; delete RG[key]; if (s && s.snap != null && f.restore) { f.restore(s.snap); if (typeof window.commit === "function") { window.commit(); return; } } }
+    else { if (document.activeElement && document.activeElement.blur) document.activeElement.blur(); delete RG[key]; }
+    if (typeof window.render === "function") window.render();
+    if (d.rged != null) setTimeout(() => { const i = document.querySelector(`[data-rgrid="${CSS.escape(key)}"] .rgi`); if (i) { i.focus(); if (i.select) i.select(); } }, 0);
+  }, true);
+  document.addEventListener("keydown", ev => {
+    const i = ev.target; if (!i || !i.classList || !i.classList.contains("rgi") || ev.isComposing) return;
+    const g = i.closest(".rgrid"); if (!g) return;
+    if (ev.key === "Escape") { const b = document.querySelector(`[data-rgx="${CSS.escape(g.dataset.rgrid)}"]`); if (b) { ev.preventDefault(); ev.stopPropagation(); b.click(); } return; }
+    if (ev.key !== "Enter" || i.tagName === "SELECT") return;
+    ev.preventDefault(); const row = i.closest(".rgrow"), idx = [...row.querySelectorAll(".rgi")].indexOf(i), rows = [...g.querySelectorAll(".rgrow:not(.rgh)")], nx = rows[rows.indexOf(row) + 1];
+    const to = nx && nx.querySelectorAll(".rgi")[idx];
+    i.dispatchEvent(new Event("change", { bubbles: true }));
+    setTimeout(() => { const all = document.querySelectorAll(`[data-rgrid="${CSS.escape(g.dataset.rgrid)}"] .rgrow:not(.rgh)`), r2 = all[rows.indexOf(row) + 1]; const t2 = r2 && r2.querySelectorAll(".rgi")[idx]; if (t2) { t2.focus(); if (t2.select) t2.select(); } else if (!to) { const ok = document.querySelector(`[data-rgok="${CSS.escape(g.dataset.rgrid)}"]`); if (ok) ok.focus(); } }, 30);
+  }, true);
   // 10. 아래 단추줄: 삭제 ……… 되돌리기 · ○○ 저장
   // 아래 줄 재료: 줄 창 = del · undo · save(+ ids, count) / 작업 창 = hint · back{id,label} · go{id,label,icon,off,title,count}
+  /* 창 아래 줄: [삭제] · [ㅇㅇ 저장]은 모든 창에 되풀이되는 기능이라 아이콘 단추(이름은 마우스를 올리면, 대표 261124 "반복적으로 나타나는 기능 저장 편집 등은 아이콘으로"). 보내기 · 생성 같은 일은 글자 그대로 */
   function foot(f) {
     if (!f) return "";
     const id = f.ids || {}, ic = Object.assign({}, IC_, f.icons || {}); const at = (k, t) => `${id[k] ? ` id="${id[k]}"` : ""}${t ? ` title="${esc(t)}"` : ""}`;
-    return `<div class="actions">${f.hint ? (typeof HELP === "function" ? HELP(f.hint) : `<span class="hint">${esc(f.hint)}</span>`) : ""}${f.del ? `<button class="btn danger" type="button"${at("del", f.delTitle || "이 줄 삭제(저장 전까지 되돌릴 수 있어요)")}${f.delOff ? " disabled" : ""}>${f.delIcon != null ? f.delIcon : ic.trash}${esc(f.delLabel || "삭제")}</button>` : ""}${f.back ? `<button class="btn" type="button"${f.back.id ? ` id="${esc(f.back.id)}"` : ""}>${esc(f.back.label || "취소")}</button>` : ""}${f.left || ""}<span class="sp"></span>${f.extra || ""}${f.undo ? `<button class="btn icon" type="button"${at("undo", f.undoTitle || "저장 상태로 되돌리기")}>${ic.undo}</button>` : ""}${f.save ? `<button class="btn big ${f.primary ? "pri" : "rowsave"}" type="button"${at("save", f.saveTitle || "이 줄에서 고친 것만 바로 저장해요. 다른 줄까지 모두 저장하려면 위 [저장]을 눌러요")} ${f.saveOn ? "" : "disabled"}>${ic.save}${esc(f.save)}${f.count ? ` <span class="cnt">${esc(f.count)}</span>` : ""}</button>` : ""}${f.go ? `<button class="btn pri big" type="button"${f.go.id ? ` id="${esc(f.go.id)}"` : ""}${f.go.title ? ` title="${esc(f.go.title)}"` : ""}${f.go.off ? " disabled" : ""}>${f.go.icon || ""}${esc(f.go.label)}${f.go.count ? ` <span class="cnt">${esc(f.go.count)}</span>` : ""}</button>` : ""}</div>`;
+    return `<div class="actions">${f.hint ? (typeof HELP === "function" ? HELP(f.hint) : `<span class="hint">${esc(f.hint)}</span>`) : ""}${f.del ? `<button class="btn danger icon fic" type="button" aria-label="${esc(f.delLabel || "삭제")}"${at("del", (f.delLabel || "삭제") + " — " + (f.delTitle || "이 줄 삭제(저장 전까지 되돌릴 수 있어요)"))}${f.delOff ? " disabled" : ""}>${f.delIcon != null && f.delIcon !== "" ? f.delIcon : ic.trash}</button>` : ""}${f.back ? `<button class="btn" type="button"${f.back.id ? ` id="${esc(f.back.id)}"` : ""}>${esc(f.back.label || "취소")}</button>` : ""}${f.left || ""}<span class="sp"></span>${f.extra || ""}${f.undo ? `<button class="btn icon" type="button"${at("undo", f.undoTitle || "저장 상태로 되돌리기")}>${ic.undo}</button>` : ""}${f.save ? `<button class="btn big icon fic ${f.primary ? "pri" : "rowsave"}" type="button" aria-label="${esc(f.save)}"${at("save", f.save + " — " + (f.saveTitle || "이 줄에서 고친 것만 바로 저장해요. 다른 줄까지 모두 저장하려면 위 [저장]을 눌러요"))} ${f.saveOn ? "" : "disabled"}>${ic.save}${f.count ? `<span class="cnt">${esc(f.count)}</span>` : ""}</button>` : ""}${f.go ? `<button class="btn pri big" type="button"${f.go.id ? ` id="${esc(f.go.id)}"` : ""}${f.go.title ? ` title="${esc(f.go.title)}"` : ""}${f.go.off ? " disabled" : ""}>${f.go.icon || ""}${esc(f.go.label)}${f.go.count ? ` <span class="cnt">${esc(f.go.count)}</span>` : ""}</button>` : ""}</div>`;
   }
   // 9. 선택 전 = 할 일 창
   // 9. 선택 전 = 할 일 창(299판 연결: 앱 todoPanel도 이 함수 하나로 그림)
@@ -152,5 +210,5 @@
     el.innerHTML = `${head(spec.head)}${tabs(spec.tabs, spec.tab)}<div class="pbody">${(spec.boxes || []).map(box).join("")}</div>${foot(spec.foot)}`;
     mountFields(el, spec.boxes); return el;
   }
-  window.PANEL = { head, fitHeads, tabs, box, infoBoxes, pairUp, groups, bookRows, rows, foot, todo, render, mountFields, help, pill, IC: IC_, esc };
+  window.PANEL = { head, fitHeads, tabs, box, infoBoxes, pairUp, groups, bookRows, rows, rgrid, rgridHead, rgridOn, rgridReg, foot, todo, render, mountFields, help, pill, IC: IC_, esc };
 })();
