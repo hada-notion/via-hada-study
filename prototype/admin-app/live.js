@@ -40,7 +40,7 @@ window.liveModeFor = function (search, hostname, protocol) {
     (typeof tabs !== "undefined" ? tabs : []).forEach(fix); if (typeof activeTab !== "undefined") fix(activeTab);
   } catch (_) {}
   /* 보기만(P2 보기 칸): 이 칸의 화면은 노션 값을 보여 주기만 한다. 쓰는 단추는 끄고, 창의 칸은 잠그고, 그래도 값이 바뀌면 그 자리에서 되돌린다.
-     고칠 것은 창 위 [노션에서 열기]로. (이 묶음들은 저장 층 대상이 아니라 노션에 갈 길도 없다) */
+     고칠 것은 창 머리 [N](노션)으로. (이 묶음들은 저장 층 대상이 아니라 노션에 갈 길도 없다) */
   /* 0단계(대표 261117): 입력 칸(P1) 안에서도 노션 버튼 · 서버 동작이 따로 있는 화면은 보기만 — 라이브러리(교재 등록 = 서버가 단원까지) · 학교(학교 검색 = 학교 코드까지). 261123 학교 검색 · 학사일정 가져오기는 앱에서(liveschool.js) — 학교 칸 고치기만 보기만 */
   /* 일정 쓰기(칸 P2e — 화면 묶음 없음, P2와 함께 켤 때만, 261119 원본검수 Z2): 켜면 일정 화면은 보기만에서 빠지고 저장 층(appsave events)으로 노션에 씀. 꺼져 있으면 보기만 */
   const EVW = gOn.has("P2") && gOn.has("P2e"); window.LIVE_EVW = EVW;
@@ -48,7 +48,7 @@ window.liveModeFor = function (search, hostname, protocol) {
   const MKW = gOn.has("P3b") && gOn.has("P3m"); window.LIVE_MKW = MKW;
   /* 시험 쓰기(칸 P2x — 화면 묶음 없음, P2와 함께 켤 때만, 261123 시험 보강): 켜면 시험 화면이 보기만에서 빠지고 저장 층(appsave tests · exams · grades)으로 노션에 씀 */
   const EXW = gOn.has("P2") && gOn.has("P2x"); window.LIVE_EXW = EXW;
-  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "schools"].filter((s) => !(EVW && s === "events") && !(MKW && s === "makeup") && !(EXW && s === "exams"))); /* P3 수업은 걸음 1 = 보기만 */
+  const P2ON = gOn.has("P2"), RO = new Set([...GATES.P2, ...GATES.P3, ...GATES.P3b, "schools"].filter((s) => !(EVW && (s === "events" || s === "today") /* 261124 대표 "기존 장치와 똑같이": 홈도 일정 화면처럼 — 오른쪽 창 · 캘린더 끌기(날짜). ✔️ · ✖️ · 우선순위는 노션 홈 */) && !(MKW && s === "makeup") && !(EXW && s === "exams"))); /* P3 수업은 걸음 1 = 보기만 */
   window.liveRO = (s) => RO.has(s);
   /* (강사계정 · 대표 261123 "댓글허용이면 보기만") 강사가 댓글허용에만 든 메뉴의 화면은 보기만 칸과 같은 잠금으로(liveteacher.js가 넣음). 서버도 쓰기 403 */
   window.liveTeacherRo = new Set();
@@ -74,39 +74,26 @@ window.liveModeFor = function (search, hostname, protocol) {
   const snapRo = () => { const ks = roKeepKeys(); if (!ks.length) return snapshot(); const keep = {}; ks.forEach((k) => { keep[k] = DB[k]; DB[k] = Array.isArray(keep[k]) ? [] : {}; }); try { return snapshot(); } finally { Object.assign(DB, keep); } };
   window.liveRoReset = () => { roBase = null; };
   const roCss = document.createElement("style");
-  roCss.textContent = ".live-ro #view [data-gdel]{display:none!important}.ro-note{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#FFF6DA;color:#3A3226;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ro-note a{color:inherit;font-weight:600;text-decoration:underline}.ro-line{margin:-2px 0 8px;padding:0 4px;font-size:12px;color:#8A8378}";
+  roCss.textContent = ".live-ro #view [data-gdel]{display:none!important}.ro-note{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#FFF6DA;color:#3A3226;font-size:13px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ro-note a{color:inherit;font-weight:600;text-decoration:underline}";
   document.head.appendChild(roCss);
-  /* 보기 전용 화면 안내(261119 대표 "보기 중심인 화면에만 안내, 나머지는 다 사용 가능"): 수강료 · 청구서 · 손익 분석 · 법정 서류만(시험은 261123 쓰기 칸 P2x로 열림) 제목 줄 아래 작은 회색 한 줄(토스트 아님 · 닫기 없음).
-     어느 화면인지는 이 목록 한 곳이 기준 — 목록에 없는 화면(수업 · 일정 · 학생 · 클래스 · 등록 …)에는 보기만 칸이어도 안 뜬다 */
+  /* 보기 전용 화면 안내(대표 261124 "제목 아래 설명 줄은 모두 없애고, 노션에서 고쳐요는 필요한 곳만 자동 갱신 아래로"): 제목 아래 줄은 두지 않고,
+     제목 줄 오른쪽 상태 묶음(#pgStat — 자동 갱신 줄) 바로 아래 작은 글 한 줄. 어느 화면인지는 이 목록 한 곳이 기준 — 목록에 없는 화면에는 보기만 칸이어도 안 뜬다 */
   const RO_NOTE_SCREENS = new Set(["tuition", "bill", "bookfees", "charges", "etcs", "profit", "costs", "legal", "schools", "records", "reports", "completion", "letters", "files", "alims"]);
-  const RO_NOTE_TEXT = "이 화면은 보기만 해요 — 고칠 것은 노션에서 고쳐요";
-  /* 261119 대표("라이브러리 [+] · [연필]이 막혀 있다"): [+] · [연필]이 꺼진 화면은 이유를 한 줄로 — 라이브러리 · 학교는 노션 버튼이 서버 동작(교재 단원 · 학교 코드)까지 해서 앱에서 직접 추가하지 않음 */
-  const RO_FIN_NOTE = "결제 · 청구는 이 화면의 단추로 노션에 써요 — 그 밖은 노션에서 고쳐요"; const RO_NOTE_BY = { tuition: RO_FIN_NOTE, bill: RO_FIN_NOTE, profit: RO_FIN_NOTE, schools: "학교 추가 · 학교 코드는 [학교 검색]으로 해요 — 이름 · 기간은 노션에서 고쳐요" };
-  const roNote = (show, scr) => {
-    const v = document.getElementById("view"); if (!v) return;
-    let n = v.querySelector(":scope > .ro-line");
-    if (!show) { if (n) n.remove(); return; }
-    const top = v.querySelector(":scope > .top"); if (!top) return;
-    const txt = tRo(scr) ? T_RO_TEXT : RO_NOTE_BY[scr] || RO_NOTE_TEXT;
-    if (n && n.textContent !== txt) n.textContent = txt;
-    if (!n) { n = document.createElement("div"); n.className = "ro-line"; n.textContent = txt; }
-    if (top.nextElementSibling !== n) top.after(n);
-  };
+  const RO_NOTE_TEXT = "고칠 것은 노션에서 고쳐요";
+  const RO_NOTE_BY = { schools: "이름 · 기간은 노션에서 고쳐요" }; /* 학교 추가 · 코드는 [학교 검색]이 하므로 노션에서 고칠 것만 */
+  const T_RO_LINE = "댓글 권한 — 편집허용은 원장에게 요청해요";
+  window.LIVE_RO_LINE = "";
+  const roNote = (show, scr) => { window.LIVE_RO_LINE = show ? (tRo(scr) ? T_RO_LINE : RO_NOTE_BY[scr] || RO_NOTE_TEXT) : ""; roLinePlace(); };
   const roDress = () => {
     const q = (s) => document.querySelectorAll(s), why = "이 화면은 보기만 해요 — 고칠 것은 노션에서 고쳐요";
-    q("#addRow,#tbEd,[data-act2]:not([data-act2=aFind]):not([data-act2=aCal])").forEach((b) => { b.disabled = true; b.title = why; });
+    q("#addRow,#tbEd,[data-act2]:not([data-act2=aFind])").forEach((b) => { b.disabled = true; b.title = why; });
     const recFree = (el) => recTab() && el.closest(REC_AREA); /* 학습기록 쓰기 칸이 켜진 하루 수업 페이지의 기록 탭은 잠그지 않음 */
     q(".panel input:not([type=checkbox]):not([type=radio]),.panel textarea").forEach((i) => { if (!recFree(i) && !(attw() && i.closest(".asfree"))) i.readOnly = true; });
     q(".panel select,.panel input[type=checkbox],.panel input[type=radio]").forEach((i) => { if (!recFree(i)) i.disabled = true; });
     /* 창 안의 누르는 것은 이동(RO_PASS)만 남기고 모두 끈다: 전송 · 삭제 · 생성 · 저장 · 켜고 끄기 · 고르기 */
     /* 화면 위 줄 · 달력 · 창 어디든: 허용 목록(이동 · 보기 바꾸기 · 찾기 · 인쇄 · 입력 칸 저장 단추)에 없는 단추는 모두 끈다 — 새 단추가 생겨도 기본이 꺼짐 */
     q("#view button,#view .hf-box,#view select").forEach((b) => { if (b.closest(roPass()) || recFree(b)) return; if ("disabled" in b) b.disabled = true; b.setAttribute("aria-disabled", "true"); b.title = why; });
-    const p = document.querySelector(".panel"), id = String((activeTab.state || {}).sel || "");
-    if (p && /^[0-9a-f-]{32,36}$/i.test(id) && !p.querySelector(".ro-note")) {
-      const n = document.createElement("div"); n.className = "ro-note";
-      n.innerHTML = `<a href="https://www.notion.so/${id.replace(/-/g, "")}" target="_blank" rel="noopener">노션에서 열기</a>`;
-      const body = p.querySelector(".pbody"); body ? body.insertBefore(n, body.firstChild) : p.appendChild(n);
-    }
+    /* 창 안 [노션에서 열기] 링크는 두지 않는다 — 창 머리 [N]이 같은 페이지를 연다(대표 261124 "여기도 중복 아냐?", 같은 일 단추는 하나) */
   };
   const roLock = () => {
     const t = typeof activeTab !== "undefined" ? activeTab : null, scr = liveScr(t), on = !!(t && window.LIVE && window.LIVE.loaded && RO.has(scr));
@@ -151,11 +138,11 @@ window.liveModeFor = function (search, hostname, protocol) {
   const P1_DENY = "[data-pgdo^='send|'],[data-cetone],#pLock"; /* [data-cetone] = 클래스 [한 번 청구](노션 [기타경비 청구]) — 재무 구조 정리 뒤(담당 P0 261123) */
   const P1_DENY_TEXT = /(접수 안내|등록 안내|안내 전송|안내문 전송|재발급|학사일정 가져오기|종료 처리|교재 생성|교재비에 담기|한 번 청구)\s*\d*\s*$/; /* 담기 = 노션 [담기](서버가 청구서까지 만듦). 이 글자의 단추라도 LQ_OPEN이면 열림 */
   /* 꺼진 까닭(마우스를 올리면 · 누르면 한 줄 — 사용성 시험 261123: [종료 처리]가 왜 꺼졌는지 화면에서 알 수 없었음) */
-  const P1_WHY = "노션에서 해요 — 창 위 [노션 열기]로 그 페이지를 열어요";
+  const P1_WHY = "노션에서 해요 — 창 위 [N]으로 그 페이지를 열어요";
   const p1Why = (el) => el.matches("[data-pgdo^='send|']") ? "수료 보고서 보내기는 [학습 보고서] 화면 · 노션 발송함에서 해요"
     : /교재비에 담기/.test(el.textContent || "") ? "교재비 담기는 노션 청구서 [담기]로 해요 — 앱 재무 화면이 열리면 거기서"
     : el.matches("[data-cetone]") ? "한 번 청구는 노션 클래스 [기타경비 청구]로 해요 — 재무 화면을 정리한 뒤 앱에서 열려요"
-    : /안내 전송|안내문 전송/.test(el.textContent || "") ? "이 안내는 노션에서 담당자가 직접 보내요 — 창 위 [노션 열기]"
+    : /안내 전송|안내문 전송/.test(el.textContent || "") ? "이 안내는 노션에서 담당자가 직접 보내요 — 창 위 [N]"
     : P1_WHY;
   const p1Denied = (el) => { const hf = el && el.closest && el.closest(".hf"); if (hf && hf.closest("#view") && !window.LQ_OPEN) { const lb = hf.querySelector(".hf-lbl"); if (lb && /^개인정보 동의/.test(lb.textContent.trim())) return el.closest(".qhelp,[data-help]") ? null : hf; } /* 개인정보 동의는 livereq.js가 확인 창 → 노션 체크(자동화가 접수 안내) */ const b = el && el.closest && el.closest("button,[role=button],.btn,.lnk,label,.swf,[data-hf]"); if (!b || !b.closest("#view")) return null; if (window.LQ_OPEN && b.matches(window.LQ_OPEN)) return null; if (b.matches(P1_DENY) || b.closest(P1_DENY)) return b; const t = (b.textContent || "").trim(); if (b.matches("button,.btn,.lnk") && P1_DENY_TEXT.test(t)) return b; if (/개인정보 동의/.test(t) && t.length < 40 && !window.LQ_OPEN) return b; return null; };
   const p1Dress = () => {
@@ -203,7 +190,7 @@ window.liveModeFor = function (search, hostname, protocol) {
      창: 링크 · 도움말 · 노션 · 줄 열기/이동 · 접기 · 탭 · 할 일 줄. 위 줄: 날짜 · 달 · 주 이동, 보기 탭, 찾기, 엑셀 · 인쇄, 크기, 창 고정,
      그리고 입력 칸(P1)에서 고친 것을 다루는 실행 취소 · 다시 실행 · 모두 되돌리기 · 저장. */
   const RO_PASS0 = "a,[data-fin],[data-web],[data-asmv],#asBack,#syncBtn,[data-ft],#wdB,#cfZo,#cfZi,#mkFilT,[data-help],[data-notion],.hnot,[data-drill],[data-go],[data-gobook],[data-gochs],[data-gobill],[data-act^=go],[data-rpdo^=open],[data-rpdo^=notion],[data-pgfold],[data-entab],[data-ldn],[data-lmn],.ptabs,.ro-note,.tdr,.tdmore,.qhelp,summary,"
-    + "[data-dn],[data-mn],[data-sub],[data-cfnav],[data-mtab],[data-view],[data-wkd],[data-evsel],.foldchip,#lq,.sbx,#xlB,#prB,#undoB,#redoB,#rvAll,#saveAll,#panelT,#mkPanelT,#seaChip,#wkP,#wkN,#wkT,#lmAtt,#cbFind,#zOut,#zIn,#makeWeek,#lGen,[data-act2=aFind],[data-act2=aCal]"; /* [data-act2=aFind] · [aCal] = 학교 [학교 검색] · [학사일정 가져오기](261123 — 서버 school-api · sync-school-calendar를 앱에서 부름, liveschool.js). */ /* #makeWeek · #lGen(수업 메뉴 v559의 생성 단추) = 수업 생성: 노션 버튼과 같은 서버 함수(generate-classes)를 부르는 run이라 보기 화면에서도 켠다(대표 261117 "수업 생성은 앱에서도") */
+    + "[data-dn],[data-hcm],[data-hp],[data-hgo],[data-hatt],[data-hles],[data-hstu],[data-henr],[data-habs],[data-htab],[data-tev],[data-mn],[data-sub],[data-cfnav],[data-mtab],[data-view],[data-wkd],[data-evsel],.foldchip,#lq,.sbx,#xlB,#prB,#undoB,#redoB,#rvAll,#saveAll,#panelT,#mkPanelT,#seaChip,#wkP,#wkN,#wkT,#lmAtt,#cbFind,#zOut,#zIn,#makeWeek,#lGen,[data-act2=aFind],[data-schcal]"; /* [data-act2=aFind] = 학교 [학교 검색] · [data-schcal] = 학교 창 [학사일정 가져오기](서버 school-api · sync-school-calendar를 앱에서 부름, liveschool.js). */ /* #makeWeek · #lGen(수업 메뉴 v559의 생성 단추) = 수업 생성: 노션 버튼과 같은 서버 함수(generate-classes)를 부르는 run이라 보기 화면에서도 켠다(대표 261117 "수업 생성은 앱에서도") */
   const RO_HIT = "button,input,select,textarea,label,[role],[tabindex],[contenteditable],.btn,.lnk,.hf-box";
   const roBlock = (e) => {
     if (!document.body.classList.contains("live-ro") || !e.target.closest) return;
@@ -519,16 +506,27 @@ function liveSyncTime(iso) { try { return new Date(iso).toLocaleTimeString("ko-K
 function liveSyncMount() {
   const sa = document.getElementById("saveAll");
   const on = !!(window.LIVE && window.LIVE.loaded);
-  let b = document.getElementById("syncBtn"), t = document.getElementById("syncAt");
-  if (!sa || !on) { if (b) b.remove(); if (t) t.remove(); return; }
-  if (b && b.parentElement !== sa.parentElement) { b.remove(); if (t) t.remove(); b = t = null; }
+  let b = document.getElementById("syncBtn"), t = document.getElementById("syncAt"), ps = document.getElementById("pgStat");
+  if (!sa || !on) { if (b) b.remove(); if (ps) ps.remove(); return; }
+  if (b && b.parentElement !== sa.parentElement) { b.remove(); if (ps) ps.remove(); b = t = ps = null; }
   if (!b) {
-    document.querySelectorAll("#syncAt").forEach((x) => x.remove());
-    sa.insertAdjacentHTML("beforebegin", `<span class="sync-at" id="syncAt"></span><button type="button" class="btn tb-sync ${window._liveSyncing ? "busy" : ""}" id="syncBtn" ${window._liveSyncing ? "disabled" : ""} title="동기화 — 노션에서 바뀐 것 · 지운 줄까지 이 화면의 자료를 통째로 맞춰요(오래 걸릴 수 있어요). 저장과는 달라요: 노션 → 앱 방향이에요">${IC("rotc", "s")}<span>${window._liveSyncing ? "맞추는 중…" : "동기화"}</span></button>`);
-    b = document.getElementById("syncBtn"); t = document.getElementById("syncAt"); b.onclick = liveSyncRun;
+    document.querySelectorAll("#pgStat,#syncAt").forEach((x) => x.remove());
+    /* 상태 묶음(#pgStat) = 자동 갱신 줄(점 + 글) 위 · 보기만 안내 아래 — 제목 줄 오른쪽 끝 한 자리(대표 261124 "초록색 원도 딱 정해진 위치에만") */
+    sa.insertAdjacentHTML("beforebegin", `<span class="pg-stat" id="pgStat"><span class="pg-live"><span class="sync-at" id="syncAt"></span></span></span><button type="button" class="btn tb-sync ${window._liveSyncing ? "busy" : ""}" id="syncBtn" ${window._liveSyncing ? "disabled" : ""} title="동기화 — 노션에서 바뀐 것 · 지운 줄까지 이 화면의 자료를 통째로 맞춰요(오래 걸릴 수 있어요). 저장과는 달라요: 노션 → 앱 방향이에요">${IC("rotc", "s")}<span>${window._liveSyncing ? "맞추는 중…" : "동기화"}</span></button>`);
+    b = document.getElementById("syncBtn"); t = document.getElementById("syncAt"); ps = document.getElementById("pgStat"); b.onclick = liveSyncRun;
   }
-  { const tr = document.querySelector("#view > .top.pg-ttl"); if (t && tr && t.parentElement !== tr) tr.appendChild(t); } /* 261123 대표: 자동 갱신 줄은 단추 줄이 아니라 제목 줄 오른쪽 끝(단추 묶음 바로 위) */
+  { const tr = document.querySelector("#view > .top.pg-ttl, #view > .ttl"); if (ps && tr && ps.parentElement !== tr) tr.appendChild(ps); } /* 모든 화면 같은 자리: 제목 줄(표 화면 .pg-ttl · 수업 화면 .ttl) 오른쪽 끝 */
   if (t) { const auto = typeof window.lrSyncText === "function" ? window.lrSyncText() : null; if (b) b.title = b.title.replace(/ \(마지막 동기화 [^)]*\)$/, "") + (auto && window.LIVE_SYNCED_AT ? ` (마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)})` : ""); const txt = auto || (window.LIVE_SYNCED_AT ? `마지막 동기화 ${liveSyncTime(window.LIVE_SYNCED_AT)}` : ""); if (t.textContent !== txt || !t.dataset.f) { t.textContent = txt; t.dataset.f = "1"; try { if (typeof fitBars === "function") fitBars(); } catch (_) {} } } /* 단추 · 시각이 붙은 뒤 위 줄이 맞는지 다시 잰다 */
+  roLinePlace();
+}
+/* 보기만 안내 한 줄(live.js roNote가 글을 정함) — 상태 묶음 안 자동 갱신 줄 바로 아래. 묶음이 없는 화면(홈 · 관리자 설정)에는 두지 않는다 */
+function roLinePlace() {
+  const ps = document.getElementById("pgStat"), txt = window.LIVE_RO_LINE || "";
+  document.querySelectorAll("#view .ro-line").forEach((n) => { if (!ps || n.parentElement !== ps || !txt) n.remove(); });
+  if (!ps || !txt) return;
+  let n = ps.querySelector(":scope > .ro-line");
+  if (!n) { n = document.createElement("span"); n.className = "ro-line"; ps.appendChild(n); }
+  if (n.textContent !== txt) n.textContent = txt;
 }
 /* 시스템 타이틀 = 노션 최상위 페이지 제목(서버 status.rootTitle). 사이드바 제목 · 탭 제목 앞부분에 쓰고, 없으면 지금 글자 그대로. */
 function liveRootTitle(t) {

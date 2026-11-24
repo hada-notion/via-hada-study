@@ -179,6 +179,7 @@ const APPSAVE = {
 		props: (r, X) => ({
 			"이름": X.str(r.name), "직책": X.str(r.role), "연락처": X.str(r.phone),
 			"출근 요일": APPS_DAYS.filter((d) => X.str(r.days).split(",").map((s) => s.trim()).includes(d)),
+			"입사일": X.range(r.hire), "퇴사일": X.range(r.quit), // 261124: 재직 상태(수식)는 보내지 않음 · 바뀐 칸만 감
 		}),
 	},
 	seasons: {
@@ -278,6 +279,10 @@ const APPSAVE = {
 			"숨김": !!r.hide, "학부모 공개": !!r.pub,
 			"클래스": X.rels(r.classIds), "학생": X.rels(r.students), "학교": X.rels(r.schools),
 			"학년": X.byNames("glevels", r.grades, "일정 학년"), // 학년 이름 → 학년(학원) DB id
+			// 담당자(직원 한 명). 할 일 달성여부 · 우선순위(261124 대표 "노션에서 바뀌면 앱도" — 홈 [✔️] · [✖️] · 창 고르기 · 보드 끌기).
+			// 앱은 글자만(달성 · 미달성 · 중요 · 보류) 보내고, 노션 선택지에 아이콘이 붙어 있으면 서버가 그 선택지로 맞춘다. 바뀐 칸만 가므로 할 일이 아닌 일정은 보내지 않음
+			"담당자": X.rels(r.who ? [r.who] : []),
+			"달성여부": X.str(r.ach), "우선순위": X.str(r.pri),
 		}),
 	},
 	// 시험(261123 시험 보강 — 서버 WRITE_DBS에 이미 열림, 칸 제한 없음). 노션에서 사람이 고치는 칸만 보낸다.
